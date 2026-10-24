@@ -4,7 +4,7 @@ import PaneModel
 /// The dropdown under the address bar: matching tabs, bookmarks and history, plus "search the web".
 @MainActor
 final class AddressSuggestionsView: NSView, NSTableViewDataSource, NSTableViewDelegate {
-    enum Row { case hit(SearchHit), web(String), suggestion(String) }
+    enum Row { case hit(SearchHit), web(String), suggestion(String), answer(QuickAnswer) }
 
     var onChoose: ((Row) -> Void)?
     var icon: (String) -> NSImage? = { _ in nil }
@@ -107,6 +107,8 @@ final class AddressSuggestionsView: NSView, NSTableViewDataSource, NSTableViewDe
             let tag: String = { switch h.item.kind { case .tab: "Switch to Tab"; case .bookmark: "Bookmark"; case .history: "History"; case .note: "Note" } }()
             c.configure(title: h.item.title.isEmpty ? h.item.host : h.item.title, subtitle: h.item.host, tag: tag,
                         icon: h.item.kind == .note ? nil : icon(h.item.url), symbol: h.item.kind == .note ? "note.text" : nil, meaning: false)
+        case .answer(let a):
+            c.configure(title: a.title, subtitle: a.detail, tag: "Copy", icon: nil, symbol: a.symbol, meaning: false)
         case .suggestion(let s):
             c.configure(title: s, subtitle: engineName(), tag: "", icon: nil, symbol: "magnifyingglass", meaning: false)
         case .web(let q):

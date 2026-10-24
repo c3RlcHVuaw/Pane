@@ -331,4 +331,9 @@ EXTRA = {
 "Street address": "Улица, дом", "Apartment, suite": "Квартира, офис", "City": "Город", "State / region": "Область / регион", "Postal code": "Индекс", "Country": "Страна",
 "Cancel": "Отмена", "Save": "Сохранить", "Card number": "Номер карты", "Name on card": "Имя на карте", "Month (MM)": "Месяц (ММ)", "Year (YYYY)": "Год (ГГГГ)",
 "Check the card number.": "Проверьте номер карты.",
+"Copy": "Копировать", "Copied": "Скопировано",
+"Save Tabs as Session…": "Сохранить вкладки как сессию…", "Open Session": "Открыть сессию", "Delete Session": "Удалить сессию",
+"Save Tabs as Session": "Сохранить вкладки как сессию", "%lld tabs will be saved. Open them again from the sidebar menu.": "Будет сохранено вкладок: %lld. Откройте их снова из меню боковой панели.",
+"Session name": "Название сессии", "Session saved": "Сессия сохранена",
+"Group Tabs by Site": "Сгруппировать вкладки по сайтам",
 }

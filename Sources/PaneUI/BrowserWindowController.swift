@@ -413,6 +413,8 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public func debugSidebarStress(steps: Int) async -> String {
         var rng = SystemRandomNumberGenerator()
         var made = 0
+        var mismatches = 0
+        let startWorkspace = workspaces.activeID
         for step in 0..<steps {
             let tabs = store.tabs
             let op = Int.random(in: 0..<9, using: &rng)
@@ -430,15 +432,25 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                 if let t = tabs.randomElement(using: &rng) { t.isPinned ? store.unpin(t.id) : store.pin(t.id) }
             case 6:
                 if let t = tabs.randomElement(using: &rng), t.id != store.activeTabID { _ = store.sleep(t.id) }
+            case 7 where step % 11 == 0:
+                if let w = workspaces.workspaces.first(where: { $0.id != workspaces.activeID }) ?? workspaces.add(name: "X") { switchWorkspace(w.id) }
             case 7:
                 if tabs.count > 3, let t = tabs.randomElement(using: &rng) { store.close(t.id); destroyLive(t.id); showActive() }
             default:
                 if let g = store.groups.randomElement(using: &rng) { if Bool.random() { store.deleteGroup(g.id) } else { store.setGroupCollapsed(g.id, !g.isCollapsed); sidebar.reload() } }
             }
             try? await Task.sleep(nanoseconds: UInt64([0, 20, 60, 160].randomElement(using: &rng)!) * 1_000_000)
+            if step % 25 == 24 {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                let c = sidebar.debugConsistency()
+                if c.rows != c.expected { mismatches += 1; NSLog("sidebar mismatch at step \(step): rows=\(c.rows) expected=\(c.expected)") }
+            }
         }
+        if workspaces.activeID != startWorkspace { switchWorkspace(startWorkspace) }
         try? await Task.sleep(nanoseconds: 600_000_000)
-        return "sidebar survived: steps=\(steps) tabs=\(store.tabs.count) groups=\(store.groups.count) made=\(made)"
+        let c = sidebar.debugConsistency()
+        if c.rows != c.expected { mismatches += 1 }
+        return "sidebar survived: steps=\(steps) tabs=\(store.tabs.count) groups=\(store.groups.count) made=\(made) mismatches=\(mismatches)"
     }
 
     /// Debug aid: feeds absurdly long text to every place that shows page-controlled text.
@@ -772,6 +784,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         workspaces.activate(id)
         store.replaceSession(from: sessionURL, freshTabURL: settings.newTabURL)
         sidebar.refreshWorkspace()
+        sidebar.reloadFromScratch()
         showActive()
         updateStar()
         if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
@@ -1611,6 +1624,22 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     // MARK: Remembering pages
 
+    /// The text of every open page, kept in memory only, so one search finds a word on any open tab.
+    private var tabText: [UUID: String] = [:]
+
+    private func captureTabText(_ id: UUID) {
+        guard let l = live[id], let url = store.tab(id)?.url, url.hasPrefix("http"), pdfOverlays[id] == nil else { return }
+        let js = "(() => { if (document.querySelector('input[type=password]')) return ''; return (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').trim().slice(0, 30000); })()"
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            let params = try? JSONSerialization.data(withJSONObject: ["expression": js, "returnByValue": true])
+            guard let self, let raw = try? await l.tab.devTools("Runtime.evaluate", params: params.flatMap { String(data: $0, encoding: .utf8) }),
+                  let d = raw.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+                  let text = (o["result"] as? [String: Any])?["value"] as? String else { return }
+            if text.isEmpty { self.tabText[id] = nil } else { self.tabText[id] = text }
+        }
+    }
+
     /// Keeps a short piece of each page's text next to its history entry, so you can find "that article about…" by what it says.
     private func rememberPageText(_ id: UUID) {
         guard !isPrivate, storage != nil, settings.rememberPageText, let l = live[id], let url = store.tab(id)?.url,
@@ -2059,7 +2088,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     func searchItems() -> [SearchItem] {
         var out: [SearchItem] = store.tabs.filter { !$0.url.isEmpty }.map {
-            SearchItem(id: "tab:\($0.id)", kind: .tab, title: $0.displayTitle, url: $0.url, tabID: $0.id, lastUsed: $0.lastActive)
+            SearchItem(id: "tab:\($0.id)", kind: .tab, title: $0.displayTitle, url: $0.url, tabID: $0.id, lastUsed: $0.lastActive, detail: tabText[$0.id] ?? "")
         }
         func walk(_ n: BookmarkNode) {
             if let u = n.url { out.append(SearchItem(id: "bm:\(n.id)", kind: .bookmark, title: n.displayTitle, url: u)) }
@@ -2451,6 +2480,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         store.close(id)
         destroyLive(id)
         favicons[id] = nil
+        tabText[id] = nil
         if wasActive { showActive() }
     }
 
@@ -2483,6 +2513,38 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         store.addTab(url: url, groupID: group)
         showActive()
     }
+
+    var savedSessions: [(id: UUID, name: String, count: Int)] { SessionStore.shared.sessions.map { ($0.id, $0.name, $0.pages.count) } }
+
+    func saveSession() {
+        let pages = store.tabs.filter { $0.url.hasPrefix("http") }.map { SavedSession.Page(url: $0.url, title: $0.displayTitle) }
+        guard !pages.isEmpty else { NSSound.beep(); return }
+        let alert = NSAlert()
+        alert.messageText = tr("Save Tabs as Session")
+        alert.informativeText = String(localized: "\(pages.count) tabs will be saved. Open them again from the sidebar menu.")
+        alert.addButton(withTitle: tr("Save")); alert.addButton(withTitle: tr("Cancel"))
+        let field = NSTextField(string: ""); field.placeholderString = tr("Session name")
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = field; alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, SessionStore.shared.add(name: name, pages: pages) != nil else { return }
+        ToastView.show(in: webHost, message: tr("Session saved"), symbol: "tray.full", duration: 2)
+    }
+
+    func openSession(_ id: UUID) {
+        guard let s = SessionStore.shared.session(id) else { return }
+        let g = store.createGroup(name: s.name, colorIndex: store.groups.count)
+        var first: UUID?
+        for p in s.pages {
+            let t = store.addTab(url: p.url, groupID: g, activate: first == nil)
+            if first == nil { first = t }
+            store.update(t, title: p.title)
+        }
+        if first != nil { showActive() }
+    }
+
+    func deleteSession(_ id: UUID) { SessionStore.shared.remove(id) }
 
     var canReopenClosed: Bool { !closedTabs.isEmpty }
     func reopenClosed() { reopenClosedTab(nil) }
@@ -2529,7 +2591,17 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         let q = addressField.stringValue.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty, q != addressFull else { suggestions.hide(); return }
         let hits = search.keywordSearch(q, in: searchItems(), limit: 5)
-        suggestions.show(hits.map { .hit($0) } + [.web(q)])
+        answerTask?.cancel(); currentAnswer = nil
+        if let v = QuickAnswers.calculate(q) { currentAnswer = QuickAnswer(title: QuickAnswers.format(v), detail: q, symbol: "equal.circle.fill") }
+        else if QuickAnswers.parseConversion(q) != nil {
+            answerTask = Task { @MainActor [weak self] in
+                let a = await QuickAnswers.answer(for: q)
+                guard let self, !Task.isCancelled, let a, self.isEditingAddress, self.addressField.stringValue.trimmingCharacters(in: .whitespaces) == q else { return }
+                self.currentAnswer = a
+                self.suggestions.show(self.answerRows() + hits.map { .hit($0) } + [.web(q)])
+            }
+        }
+        suggestions.show(answerRows() + hits.map { .hit($0) } + [.web(q)])
         // The search engine's own suggestions follow a moment later, if it has any (they only go out when this is on).
         suggestTask?.cancel()
         guard settings.webSuggestions, !isPrivate || true, !AddressInput.looksLikeAddress(q) else { return }
@@ -2539,11 +2611,14 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             guard !Task.isCancelled else { return }
             let found = await WebSuggestions.fetch(q, engineID: engine)
             guard let self, !Task.isCancelled, self.isEditingAddress, self.addressField.stringValue.trimmingCharacters(in: .whitespaces) == q, !found.isEmpty else { return }
-            self.suggestions.show(hits.map { .hit($0) } + [.web(q)] + found.map { .suggestion($0) })
+            self.suggestions.show(self.answerRows() + hits.map { .hit($0) } + [.web(q)] + found.map { .suggestion($0) })
         }
     }
 
     private var suggestTask: Task<Void, Never>?
+    private var answerTask: Task<Void, Never>?
+    private var currentAnswer: QuickAnswer?
+    private func answerRows() -> [AddressSuggestionsView.Row] { currentAnswer.map { [.answer($0)] } ?? [] }
 
     private func chooseSuggestion(_ row: AddressSuggestionsView.Row) {
         suggestions.hide()
@@ -2552,6 +2627,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         case .hit(let h): paletteChose(.item(h.item), newTab: false)
         case .web(let q): paletteChose(.web(q), newTab: false)
         case .suggestion(let s): paletteChose(.web(s), newTab: false)
+        case .answer(let a):
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(a.title, forType: .string)
+            ToastView.show(in: webHost, message: tr("Copied"), symbol: "doc.on.doc", duration: 1.6)
+            addressField.stringValue = addressFull
         }
     }
 
@@ -2827,7 +2906,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         if wasLoading != state.isLoading { sidebar.refreshTab(id) }
         if wasLoading, !state.isLoading, !isPrivate, id != agentPrivateTabID, let t = store.tab(id) { history.record(url: t.url, title: t.title) }
         if state.isLoading { pdfOverlays.removeValue(forKey: id)?.removeFromSuperview() }
-        if wasLoading, !state.isLoading { offeredFill.remove(id); if id != agentPrivateTabID { passwordsAfterLoad(id); rememberPageText(id); showNoteIfAny(id) }; showPDFIfNeeded(id) }
+        if wasLoading, !state.isLoading { offeredFill.remove(id); if id != agentPrivateTabID { passwordsAfterLoad(id); rememberPageText(id); showNoteIfAny(id) }; if wasLoading, !state.isLoading, id != agentPrivateTabID { captureTabText(id) }; showPDFIfNeeded(id) }
     }
 
     public func tab(_ tab: BrowserTab, didChangeFavicon image: NSImage) {

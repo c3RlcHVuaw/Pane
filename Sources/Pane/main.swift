@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let env = ProcessInfo.processInfo.environment
         let dataRoot = env["PANE_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) } ?? support.appendingPathComponent("Pane")
         let languages: [String] = AppLanguage.current.hasPrefix("ru") ? ["ru-RU", "ru", "en-US", "en"] : ["en-US", "en"]
+        SessionStore.shared.configure(file: dataRoot.appendingPathComponent("sessions.json"))
         AutofillStore.shared.configure(file: dataRoot.appendingPathComponent("autofill.json"))
         let extensionsRoot = dataRoot.appendingPathComponent("Extensions")
         ExtensionStore.shared.configure(root: extensionsRoot)

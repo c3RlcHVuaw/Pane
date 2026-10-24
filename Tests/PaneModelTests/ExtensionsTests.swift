@@ -19,3 +19,24 @@ final class ExtensionsTests: XCTestCase {
         XCTAssertNil(ExtensionStore.zipPayload(ofCRX: Data("nope".utf8 + Array(repeating: 0, count: 20))))
     }
 }
+
+final class QuickAnswerTests: XCTestCase {
+    func testCalculator() {
+        XCTAssertEqual(QuickAnswers.calculate("2+2*3"), 8)
+        XCTAssertEqual(QuickAnswers.calculate("(1+2)*3,5"), 10.5)
+        XCTAssertEqual(QuickAnswers.calculate("2^10"), 1024)
+        XCTAssertNil(QuickAnswers.calculate("1/0"))
+        XCTAssertNil(QuickAnswers.calculate("12345"))
+        XCTAssertNil(QuickAnswers.calculate("1.2.3.4"))
+        XCTAssertNil(QuickAnswers.calculate("apple+2"))
+    }
+
+    func testConversionParsing() {
+        let a = QuickAnswers.parseConversion("100 usd in rub")
+        XCTAssertEqual(a?.amount, 100); XCTAssertEqual(a?.from, "USD"); XCTAssertEqual(a?.to, "RUB")
+        let b = QuickAnswers.parseConversion("50 евро в рублях")
+        XCTAssertEqual(b?.from, "EUR"); XCTAssertEqual(b?.to, "RUB")
+        XCTAssertNil(QuickAnswers.parseConversion("how to cook"))
+        XCTAssertEqual(QuickAnswers.convert(100, from: "USD", to: "EUR", rates: ["USD": 1, "EUR": 0.9]) ?? 0, 90, accuracy: 0.0001)
+    }
+}

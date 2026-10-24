@@ -135,12 +135,15 @@ final class TabCellView: NSTableCellView {
         let isStart = tab.url.isEmpty
         icon.image = isStart ? NSImage(systemSymbolName: "square.grid.2x2.fill", accessibilityDescription: nil) : tabIcon(image)
         icon.contentTintColor = (image == nil || isStart) ? .secondaryLabelColor : nil
-        icon.alphaValue = dimmed ? 0.5 : 1
+        // Tabs nobody has touched for a while fade, so the ones worth closing stand out.
+        let idle = Date().timeIntervalSince(tab.lastActive)
+        let fade: CGFloat = (active || tab.isPinned) ? 1 : CGFloat(max(0.55, 1 - max(0, idle - 12 * 3600) / (6 * 86400) * 0.45))
+        icon.alphaValue = dimmed ? 0.5 : fade
         icon.isHidden = loading
         loading ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
         title.stringValue = tab.displayTitle
         title.font = .systemFont(ofSize: 13, weight: active ? .medium : .regular)
-        title.textColor = dimmed ? .secondaryLabelColor : .labelColor
+        title.textColor = dimmed ? .secondaryLabelColor : NSColor.labelColor.withAlphaComponent(fade)
         self.audible = audible
         self.muted = muted
         updateAccessories()

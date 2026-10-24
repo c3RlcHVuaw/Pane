@@ -35,7 +35,7 @@ grep -q "tabs=1 live=1" "$OUT/stress-stress.txt" 2>/dev/null && pass "no leaked 
 
 echo "Sidebar stress: random moves, groups, pins, sleeps, closes"
 run sidebar 60 PANE_DEBUG_SIDEBAR=250
-grep -q "sidebar survived" "$OUT/sidebar-sidebar.txt" 2>/dev/null && pass "sidebar survived 250 random operations" || fail "sidebar stress did not finish"
+grep -q "sidebar survived.*mismatches=0" "$OUT/sidebar-sidebar.txt" 2>/dev/null && pass "sidebar survived 250 random operations" || fail "sidebar stress did not finish"
 
 echo "AutoFill and spell check"
 run autofill 12 PANE_DEBUG_AUTOFILL=1

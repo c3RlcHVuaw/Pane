@@ -15,6 +15,10 @@ protocol TabCommands: AnyObject {
     var canReopenClosed: Bool { get }
     func reopenClosed()
     func sleepInactive()
+    func saveSession()
+    var savedSessions: [(id: UUID, name: String, count: Int)] { get }
+    func openSession(_ id: UUID)
+    func deleteSession(_ id: UUID)
 }
 
 final class SidebarNode: NSObject {
@@ -44,6 +48,8 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     private var animatingUntil = Date.distantPast
     private var reloadPending = false
     private var knownTabs: Set<UUID> = []
+    private var dragging = false
+    private var forceFullReload = false
     private var shownRoot: [SidebarNode] = []
     private var shownKids: [ObjectIdentifier: [SidebarNode]] = [:]
     private let selectionPill = SelectionPill()
@@ -133,12 +139,25 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             bottom.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
         ])
         setAccessibilityLabel(tr("Tab sidebar"))
+        // Idle tabs fade with time; refresh the look now and then.
+        Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.refreshVisibleCells() } }
     }
 
     // MARK: Sync with model
 
     /// Rebuilds the list. Calls are coalesced and held back while a disclosure animation runs:
     /// reloading an NSOutlineView mid-animation leaves blank or overlapping rows.
+    /// Debug aid: rows on screen versus rows the model calls for.
+    func debugConsistency() -> (rows: Int, expected: Int) {
+        var n = store.ungrouped.count + store.groups.count + (store.sleeping.isEmpty ? 0 : 1)
+        for g in store.groups where !g.isCollapsed { n += store.tabs(in: g.id).count }
+        if sleepingExpanded { n += store.sleeping.count }
+        return (outline.numberOfRows, n)
+    }
+
+    /// Drops the animated bookkeeping: the next reload rebuilds the list from scratch (workspace switches).
+    func reloadFromScratch() { forceFullReload = true; reload() }
+
     func reload() {
         guard !reloadPending else { return }
         reloadPending = true
@@ -147,7 +166,7 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.reloadPending = false
-                if self.animatingUntil.timeIntervalSinceNow > 0 { self.reload() } else { self.performReload() }
+                if self.animatingUntil.timeIntervalSinceNow > 0 || self.dragging { self.reload() } else { self.performReload() }
             }
         }
     }
@@ -182,7 +201,8 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             return kids.first { $0.value.contains { $0 === n } }?.key
         }
         var newStructure = structure()
-        var canDiff = !oldStructure.root.isEmpty && outline.numberOfRows > 0 && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        var canDiff = !forceFullReload && !oldStructure.root.isEmpty && outline.numberOfRows > 0 && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        forceFullReload = false
         var changes = 0
         if canDiff {
             for t in store.tabs {
@@ -195,7 +215,10 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             }
             changes = newStructure.root.difference(from: oldStructure.root).count
             for (k, v) in newStructure.kids { changes += v.difference(from: oldStructure.kids[k] ?? []).count }
-            if changes > 14 { canDiff = false }
+            // Only tabs coming, going or moving: if the groups themselves changed, rebuild instead.
+            let groupIDs: ([SidebarNode]) -> [UUID] = { $0.compactMap { if case .group(let g) = $0.kind { return g }; return nil } }
+            if groupIDs(newStructure.root) != groupIDs(oldStructure.root) { canDiff = false }
+            if changes > 8 { canDiff = false }
         }
 
         if canDiff {
@@ -232,6 +255,17 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             if let n = groupNodes[g.id] { if g.isCollapsed == outline.isItemExpanded(n) { g.isCollapsed ? outline.collapseItem(n) : outline.expandItem(n) } }
         }
         if sleepingExpanded != outline.isItemExpanded(sleepingNode) { sleepingExpanded ? outline.expandItem(sleepingNode) : outline.collapseItem(sleepingNode) }
+        // Safety net: if the animated update left the list out of step with the model, rebuild it.
+        func expectedRows() -> Int {
+            var n = shownRoot.count
+            for node in shownRoot where outline.isItemExpanded(node) { n += shownKids[ObjectIdentifier(node)]?.count ?? 0 }
+            return n
+        }
+        if canDiff && outline.numberOfRows != expectedRows() {
+            outline.reloadData()
+            for g in store.groups { if let n = groupNodes[g.id] { g.isCollapsed ? outline.collapseItem(n) : outline.expandItem(n) } }
+            if sleepingExpanded { outline.expandItem(sleepingNode) }
+        }
         refreshVisibleCells()
         selectActive()
 
@@ -385,6 +419,7 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     func outlineView(_ ov: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
         guard let node = draggedItems.first as? SidebarNode, case .tab(let id) = node.kind, let t = store.tab(id) else { return }
         let chip = Self.dragChip(title: t.displayTitle, icon: tabIcon(favicon(id)))
+        dragging = true
         session.draggingFormation = .none
         session.animatesToStartingPositionsOnCancelOrFail = true
         session.enumerateDraggingItems(options: [], for: ov, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
@@ -397,6 +432,11 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
                 return [c]
             }
         }
+    }
+
+    func outlineView(_ ov: NSOutlineView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        dragging = false
+        lastDropSlot = nil
     }
 
     /// The little card that follows the pointer while a tab is dragged.
@@ -518,12 +558,56 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             let anyOpen = store.groups.contains { !$0.isCollapsed }
             m.addItem(item(anyOpen ? "Collapse All Groups" : "Expand All Groups", #selector(toggleAllGroups(_:)), anyOpen))
         }
+        m.addItem(.separator())
+        m.addItem(item("Save Tabs as Session…", #selector(saveSessionClicked)))
+        if let list = commands?.savedSessions, !list.isEmpty {
+            let open = NSMenuItem(title: tr("Open Session"), action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for ses in list {
+                let it = NSMenuItem(title: "\(ses.name)  ·  \(ses.count)", action: #selector(openSessionClicked(_:)), keyEquivalent: "")
+                it.target = self; it.representedObject = ses.id
+                sub.addItem(it)
+            }
+            sub.addItem(.separator())
+            let del = NSMenuItem(title: tr("Delete Session"), action: nil, keyEquivalent: "")
+            let delSub = NSMenu()
+            for ses in list {
+                let it = NSMenuItem(title: ses.name, action: #selector(deleteSessionClicked(_:)), keyEquivalent: "")
+                it.target = self; it.representedObject = ses.id
+                delSub.addItem(it)
+            }
+            del.submenu = delSub
+            sub.addItem(del)
+            open.submenu = sub
+            m.addItem(open)
+        }
         let hasSleepable = store.tabs.contains { !$0.isPinned && !$0.isSleeping && $0.id != store.activeTabID }
         let dups = duplicateTabs()
         if hasSleepable || !dups.isEmpty { m.addItem(.separator()) }
         if hasSleepable { m.addItem(item("Put Other Tabs to Sleep", #selector(sleepInactiveTabs))) }
         if !dups.isEmpty { m.addItem(item("Close Duplicate Tabs", #selector(closeDuplicateTabs))) }
+        if !sitesToGroup().isEmpty { m.addItem(item("Group Tabs by Site", #selector(groupBySite))) }
         return m
+    }
+    @objc private func saveSessionClicked() { commands?.saveSession() }
+    @objc private func openSessionClicked(_ s: NSMenuItem) { if let id = s.representedObject as? UUID { commands?.openSession(id) } }
+    @objc private func deleteSessionClicked(_ s: NSMenuItem) { if let id = s.representedObject as? UUID { commands?.deleteSession(id) } }
+    /// Sites that have at least two loose tabs.
+    private func sitesToGroup() -> [String: [UUID]] {
+        var by: [String: [UUID]] = [:]
+        for t in store.ungrouped where !t.url.isEmpty {
+            guard var h = URL(string: t.url)?.host else { continue }
+            if h.hasPrefix("www.") { h.removeFirst(4) }
+            by[h, default: []].append(t.id)
+        }
+        return by.filter { $0.value.count >= 2 }
+    }
+    @objc private func groupBySite() {
+        for (host, ids) in sitesToGroup().sorted(by: { $0.key < $1.key }) {
+            let name = host.split(separator: ".").dropLast().last.map { String($0).capitalized } ?? host
+            let g = store.createGroup(name: name, colorIndex: store.groups.count)
+            for id in ids { store.move(id, toGroup: g) }
+        }
     }
     @objc private func reopenClosedTab() { commands?.reopenClosed() }
     @objc private func sleepInactiveTabs() { commands?.sleepInactive() }
