@@ -188,8 +188,8 @@ private struct SuggestionChip: View {
                 Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary).opacity(hover ? 1 : 0)
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
-            .background { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.primary.opacity(hover ? 0.10 : 0.06)) }
-            .scaleEffect(hover ? 1.01 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .paneGlass(RoundedRectangle(cornerRadius: 16, style: .continuous), tint: tint.opacity(0.10))
         }
         .buttonStyle(.plain)
         .onHover { h in withAnimation(.snappy(duration: 0.15)) { hover = h } }
@@ -367,7 +367,7 @@ private struct ApprovalCard: View {
             Button { onAlwaysAllow() } label: {
                 Label("Always allow — don't ask again", systemImage: "checkmark.shield").font(.system(size: 11.5, weight: .medium))
             }
-            .buttonStyle(.plain).foregroundStyle(.orange)
+            .paneButtonStyle().tint(.orange)
             .help("Turns on auto-approve. The agent still never types passwords or card numbers. You can turn it off in the panel header.")
         }
         .padding(14)
@@ -378,9 +378,9 @@ private struct ApprovalCard: View {
     }
 
     private var allow: some View {
-        Button { onAnswer(true) } label: { Text("Allow").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+        Button { onAnswer(true) } label: { Text("Allow").frame(maxWidth: .infinity) }.paneButtonStyle(prominent: true).keyboardShortcut(.defaultAction)
     }
     private var deny: some View {
-        Button { onAnswer(false) } label: { Text("Don't allow").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
+        Button { onAnswer(false) } label: { Text("Don't allow").frame(maxWidth: .infinity) }.paneButtonStyle()
     }
 }

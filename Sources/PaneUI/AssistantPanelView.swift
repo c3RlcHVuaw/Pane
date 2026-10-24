@@ -77,10 +77,10 @@ struct AssistantPanelView: View {
         let on = model.mode == mode
         return Button { withAnimation(.snappy) { model.mode = mode } } label: {
             Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                .foregroundStyle(on ? Color.white : Color.primary.opacity(0.75))
-                .padding(.horizontal, 11).padding(.vertical, 4)
-                .background { if on { Capsule().fill(model.accent) } }
+                .foregroundStyle(on ? Color.white : Color.primary.opacity(0.8))
+                .padding(.horizontal, 12).padding(.vertical, 6)
                 .contentShape(Capsule())
+                .paneGlass(Capsule(), tint: on ? model.accent : nil)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -89,31 +89,48 @@ struct AssistantPanelView: View {
     private var header: some View {
         // Wide panels show the title; narrow ones drop it instead of squeezing the controls out of place.
         ViewThatFits(in: .horizontal) {
-            headerRow(showTitle: true)
-            headerRow(showTitle: false)
+            headerRow(showTitle: true, collapsed: false)
+            headerRow(showTitle: false, collapsed: false)
+            headerRow(showTitle: false, collapsed: true)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
-    private func headerRow(showTitle: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles").font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(LinearGradient(colors: [.purple, .blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
+    private func headerRow(showTitle: Bool, collapsed: Bool) -> some View {
+        HStack(spacing: collapsed ? 6 : 8) {
+            if !collapsed {
+                Image(systemName: "sparkles").font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LinearGradient(colors: [.purple, .blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
             if showTitle { Text("Assistant").font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize() }
             if model.agentEnabled {
-                HStack(spacing: 2) {
-                    modeButton("Ask", .ask)
-                    modeButton("Act", .act)
+                PaneGlassGroup(spacing: 4) {
+                    HStack(spacing: 4) {
+                        modeButton("Ask", .ask)
+                        modeButton("Act", .act)
+                    }
                 }
-                .padding(2)
-                .background { Capsule().fill(Color.primary.opacity(0.10)) }
                 .fixedSize()
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Assistant mode")
                 .help("Ask: answers questions about pages.  Act: controls the browser for you.")
             }
             Spacer(minLength: 4)
-            if isAct {
+            if isAct && collapsed {
+                Menu {
+                    Button { model.autoApprove.toggle() } label: { Label("Auto-approve actions", systemImage: model.autoApprove ? "checkmark" : "") }
+                    Button { model.agentPrivate.toggle() } label: { Label("Private mode", systemImage: model.agentPrivate ? "checkmark" : "") }
+                    Button { showHistory = true } label: { Label("Past conversations", systemImage: "clock.arrow.circlepath") }
+                    if !agent.items.isEmpty { Button { withAnimation(.snappy) { agent.clear() } } label: { Label("New chat", systemImage: "square.and.pencil") } }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.primary.opacity(0.75)).frame(width: 28, height: 28)
+                        .paneGlass(Circle())
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .popover(isPresented: $showHistory, arrowEdge: .bottom) {
+                    AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) })
+                }
+            } else if isAct {
                 headerButton(symbol: model.autoApprove ? "checkmark.shield.fill" : "checkmark.shield", tint: model.autoApprove ? .orange : nil,
                              help: model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.",
                              label: model.autoApprove ? "Auto-approve on" : "Auto-approve off") { withAnimation(.snappy) { model.autoApprove.toggle() } }
@@ -126,7 +143,7 @@ struct AssistantPanelView: View {
                         AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) })
                     }
             }
-            if isAct ? !agent.items.isEmpty : !session.messages.isEmpty {
+            if !collapsed || !isAct, isAct ? !agent.items.isEmpty : !session.messages.isEmpty {
                 headerButton(symbol: "square.and.pencil", tint: nil, help: "New chat", label: "New chat") { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } }
             }
             headerButton(symbol: "xmark", tint: nil, help: "Close  ⇧⌘A", label: "Close assistant") { model.onClose() }
@@ -134,15 +151,7 @@ struct AssistantPanelView: View {
     }
 
     private func headerButton(symbol: String, tint: Color?, help: LocalizedStringKey, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 13, weight: .medium))
-                .foregroundStyle(tint ?? Color.primary.opacity(0.6))
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(label)
+        GlassIconButton(symbol: symbol, tint: tint, size: 28, help: help, label: label, action: action)
     }
 
     // MARK: Setup
@@ -233,7 +242,10 @@ struct AssistantPanelView: View {
         Button {
             if busy { if isAct { agent.stop() } else { session.stop() } } else { send() }
         } label: {
-            Image(systemName: sendSymbol).font(.system(size: 26)).foregroundStyle(sendTint)
+            Image(systemName: busy ? "stop.fill" : "arrow.up").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .contentShape(Circle())
+                .paneGlass(Circle(), tint: busy ? Color.red : (model.draft.trimmingCharacters(in: .whitespaces).isEmpty ? Color.secondary : model.accent))
         }
         .buttonStyle(.plain)
         .help(busy ? "Stop  ⌘." : "Send  ↩")
@@ -250,8 +262,8 @@ struct AssistantPanelView: View {
                     Circle().fill(Color.red.opacity(0.18)).frame(width: 30 + CGFloat(voice.level) * 10, height: 30 + CGFloat(voice.level) * 10)
                         .animation(.easeOut(duration: 0.08), value: voice.level)
                 }
-                Image(systemName: voice.isListening ? "mic.fill" : "mic").font(.system(size: 15))
-                    .foregroundStyle(voice.isListening ? Color.red : Color.primary.opacity(0.55))
+                Image(systemName: voice.isListening ? "mic.fill" : "mic").font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(voice.isListening ? Color.red : Color.primary.opacity(0.7))
             }
             .frame(width: 30, height: 30)
         }
@@ -272,10 +284,10 @@ struct AssistantPanelView: View {
             micButton
             sendButton
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 10)
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
         .padding(.vertical, 6)
-        .background { RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.primary.opacity(0.07)) }
+        .paneGlass(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: false)
         .padding(12)
     }
 

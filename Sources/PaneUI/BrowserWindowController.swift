@@ -1,6 +1,7 @@
 import AppKit
 import PaneEngine
 import PaneModel
+import ScreenCaptureKit
 @preconcurrency import UserNotifications
 import SwiftUI
 
@@ -309,7 +310,19 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                     saveAssistantKey: { [weak self] k in self?.assistantKey.save(k); self?.refreshAssistantModel() },
                     clearAssistantKey: { [weak self] in self?.assistantKey.clear(); self?.refreshAssistantModel() },
                     testAssistant: { [weak self] in await self?.testAssistantConnection() ?? (false, "") },
-                    vault: vault))
+                    vault: vault,
+                    clearBrowsingData: { [weak self] in
+                        guard let self else { return }
+                        await self.engine.clearBrowsingData(for: self.profile)
+                        self.liveTabsReload()
+                    },
+                    isDefaultBrowser: {
+                        guard let app = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!) else { return false }
+                        return app.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+                    },
+                    makeDefaultBrowser: {
+                        for scheme in ["http", "https"] { NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpenURLsWithScheme: scheme) { _ in } }
+                    }))
         }
         settingsWindow?.show()
     }
@@ -400,7 +413,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         bookmarkThisPage(nil)
         try? await Task.sleep(nanoseconds: 700_000_000)
         out.append("star pulse ran, bookmarked=\(bookmarks.isBookmarked("http://127.0.0.1:8765/ads.html"))")
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        for _ in 0..<10 where history.entries.first(where: { $0.url.contains("ads.html") })?.snippet == nil { try? await Task.sleep(nanoseconds: 1_000_000_000) }
         out.append("history snippet: \(history.entries.first { $0.url.contains("ads.html") }?.snippet ?? "none")")
         // Sidebar tint colour from an icon.
         let img = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { r in NSColor.systemOrange.setFill(); r.fill(); return true }
@@ -439,6 +452,80 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         let back = await translator.toggle(on: tab, into: "Russian") { _, _ in }
         let restored = await text()
         return "before: \(before)\n\noutcome: \(outcome)\nafter: \(after)\n\nrestore: \(back)\nrestored == before: \(restored == before)"
+    }
+
+    public func debugFullscreen() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/video.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        guard let tab = activeLive?.tab, let id = store.activeTabID else { return "no tab" }
+        func eval(_ js: String) async -> String {
+            let p = try? JSONSerialization.data(withJSONObject: ["expression": js, "awaitPromise": true, "userGesture": true, "returnByValue": true])
+            return (try? await tab.devTools("Runtime.evaluate", params: p.flatMap { String(data: $0, encoding: .utf8) })) ?? "error"
+        }
+        var out = ""
+        out += "request: " + (await eval("document.documentElement.requestFullscreen().then(() => 'ok', e => 'denied:' + e.name)")) + "\n"
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out += "in fullscreen: window=\(window?.styleMask.contains(.fullScreen) == true) host=\(fullscreenHost != nil) containerParentIsHost=\(live[id]?.container.superview === fullscreenHost) size=\(Int(live[id]?.container.frame.width ?? 0))x\(Int(live[id]?.container.frame.height ?? 0))\n"
+        out += "exit: " + (await eval("document.exitFullscreen().then(() => 'ok', e => 'denied:' + e.name)")) + "\n"
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out += "after exit: window=\(window?.styleMask.contains(.fullScreen) == true) host=\(fullscreenHost != nil) containerParentIsWebHost=\(live[id]?.container.superview === webHost) size=\(Int(live[id]?.container.frame.width ?? 0))x\(Int(live[id]?.container.frame.height ?? 0)) webHost=\(Int(webHost.frame.width))x\(Int(webHost.frame.height))"
+        return out
+    }
+
+    /// Debug aid: builds the right-click menu for several situations and lists the items.
+    public func debugContextMenus() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        guard let tab = activeLive?.tab, let id = store.activeTabID else { return "no tab" }
+        func titles(_ info: ContextMenuInfo) -> String { contextMenu(for: info, tab: tab, id: id).items.map { $0.isSeparatorItem ? "—" : $0.title }.joined(separator: " | ") }
+        return "PAGE: " + titles(ContextMenuInfo()) + "\n\nLINK: " + titles(ContextMenuInfo(link: "https://example.com", linkText: "Example", hasLink: true))
+            + "\n\nIMAGE: " + titles(ContextMenuInfo(mediaSource: "https://example.com/a.png", media: .image))
+            + "\n\nTEXT: " + titles(ContextMenuInfo(selection: "hello world"))
+            + "\n\nINPUT: " + titles(ContextMenuInfo(isEditable: true, misspelledWord: "helo", suggestions: ["hello", "help"]))
+    }
+
+    /// Debug aid: right-clicks inside the page with synthetic mouse events.
+    public func debugRightClick() async {
+        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        guard let tab = activeLive?.tab else { return }
+        for type in ["mouseMoved", "mousePressed", "mouseReleased"] {
+            var p: [String: Any] = ["type": type, "x": 100, "y": 60]
+            if type != "mouseMoved" { p["button"] = "right"; p["clickCount"] = 1 }
+            let data = try? JSONSerialization.data(withJSONObject: p)
+            _ = try? await tab.devTools("Input.dispatchMouseEvent", params: data.flatMap { String(data: $0, encoding: .utf8) })
+        }
+    }
+
+    /// Debug aid: a true picture of this window as the screen shows it (glass, web pages and all), taken with ScreenCaptureKit.
+    public func debugRealSnapshot(to path: String) async -> String {
+        guard let window else { return "no window" }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let target = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) else { return "window not found among \(content.windows.count)" }
+            let filter = SCContentFilter(desktopIndependentWindow: target)
+            let config = SCStreamConfiguration()
+            config.width = Int(target.frame.width * 2); config.height = Int(target.frame.height * 2)
+            config.showsCursor = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            let rep = NSBitmapImageRep(cgImage: image)
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            return "saved \(image.width)x\(image.height)"
+        } catch { return "error: \(error.localizedDescription)" }
+    }
+
+    public func debugProbe() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/probe.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        guard let tab = activeLive?.tab else { return "no tab" }
+        var out = ""
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let params = try? JSONSerialization.data(withJSONObject: ["expression": "JSON.stringify(window.results)", "returnByValue": true])
+            out = (try? await tab.devTools("Runtime.evaluate", params: params.flatMap { String(data: $0, encoding: .utf8) })) ?? "none"
+            if out.contains("done") { break }
+        }
+        return out
     }
 
     public func debugPDF() async -> String {
@@ -1031,7 +1118,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             assistantCard.trailingAnchor.constraint(equalTo: assistantBox.trailingAnchor, constant: -8),
             assistantCard.topAnchor.constraint(equalTo: assistantBox.topAnchor, constant: 8),
             assistantCard.bottomAnchor.constraint(equalTo: assistantBox.bottomAnchor, constant: -8),
-            assistantCard.widthAnchor.constraint(equalToConstant: 372),
+            assistantCard.leadingAnchor.constraint(equalTo: assistantBox.leadingAnchor, constant: 2),  // the card takes whatever width the panel has
         ])
 
         sidebarWidth = sidebarBox.widthAnchor.constraint(equalToConstant: sidebarCollapsed ? 0 : expandedWidth)
@@ -1252,6 +1339,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     /// Debug aid: opens the panel and asks a question right away.
     public func debugAssistant(question: String?) {
         toggleAssistant(nil)
+        if assistantOpen { assistantWidth.constant = assistantTargetWidth }  // snapshot runs don't always run the animation
         if let q = question { askAssistant(q) }
     }
 
@@ -1562,11 +1650,29 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                 guard let self, self.window?.isVisible == true else { return }
                 let pop = NSPopover()
                 pop.behavior = .transient
-                let host = NSHostingController(rootView: WhatsNewView(title: news.title, lines: news.lines) { [weak pop] in pop?.performClose(nil) })
+                let anchor: NSView = self.modeControl
+                let host = NSHostingController(rootView: UpdateCompleteView(
+                    title: news.title,
+                    onSeeWhatsNew: { [weak self, weak pop] in
+                        pop?.performClose(nil)
+                        guard let self else { return }
+                        let card = NSPopover(); card.behavior = .transient
+                        let h = NSHostingController(rootView: WhatsNewView(title: news.title, lines: news.lines) { [weak card] in card?.performClose(nil) })
+                        h.sizingOptions = [.preferredContentSize]
+                        card.contentViewController = h
+                        self.whatsNewPopover = card
+                        card.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
+                    },
+                    onShare: { [weak self, weak pop] in
+                        pop?.performClose(nil)
+                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("https://pane.2-26-86-13.sslip.io/Pane.dmg", forType: .string)
+                        if let self { ToastView.show(in: self.webHost, message: "Download link copied — send it to a friend", symbol: "link", duration: 3) }
+                    },
+                    onClose: { [weak pop] in pop?.performClose(nil) }))
                 host.sizingOptions = [.preferredContentSize]
                 pop.contentViewController = host
                 self.whatsNewPopover = pop
-                pop.show(relativeTo: self.addressField.bounds, of: self.addressField, preferredEdge: .maxY)
+                pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
             }
         }
     }
@@ -2235,6 +2341,28 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         }
     }
 
+    /// After cookies are gone, pages that were signed in should notice: reload the visible one.
+    func liveTabsReload() { activeLive?.tab.reload() }
+
+    /// Chromium's developer tools for the current page (⌥⌘I).
+    @objc public func showDevTools(_ s: Any?) { activeLive?.tab.showDevTools() ?? NSSound.beep() }
+
+    /// The page's source in a new tab (⌥⌘U).
+    @objc public func viewSource(_ s: Any?) {
+        guard let t = store.activeTabID.flatMap({ store.tab($0) }), t.url.hasPrefix("http") else { NSSound.beep(); return }
+        store.addTab(url: "view-source:" + t.url, groupID: t.groupID)
+    }
+
+    /// Opens addresses and files handed over by other apps (links clicked in Mail, files dropped on the Dock icon).
+    public func openExternal(_ urls: [URL]) {
+        for url in urls {
+            let s = url.isFileURL ? url.absoluteString : url.absoluteString
+            guard url.scheme == "http" || url.scheme == "https" || url.isFileURL else { continue }
+            if let id = store.activeTabID, store.tab(id)?.url.isEmpty == true, urls.count == 1 { open(s, newTab: false) } else { open(s, newTab: true) }
+        }
+        window?.makeKeyAndOrderFront(nil)
+    }
+
     /// Reader mode: shows the article of the current page in a clean layer (⌥⌘R again, or Esc, closes it).
     @objc public func toggleReader(_ s: Any?) {
         guard let tab = activeLive?.tab else { NSSound.beep(); return }
@@ -2344,6 +2472,242 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public func tab(_ tab: BrowserTab, statusChanged text: String) {
         guard let id = tabIDs[ObjectIdentifier(tab as AnyObject)], id == store.activeTabID else { return }
         statusBubble.set(text)
+    }
+
+    // MARK: Right-click menu
+
+    /// A menu item that runs a closure.
+    private final class ActionItem: NSMenuItem {
+        private let handler: () -> Void
+        init(_ title: String, symbol: String? = nil, enabled: Bool = true, bold: Bool = false, _ handler: @escaping () -> Void) {
+            self.handler = handler
+            super.init(title: title, action: #selector(fire), keyEquivalent: "")
+            target = self
+            isEnabled = enabled
+            if let symbol { image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+            if bold { attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)]) }
+        }
+        required init(coder: NSCoder) { fatalError() }
+        @objc private func fire() { handler() }
+    }
+
+    public func tab(_ tab: BrowserTab, showsContextMenu info: ContextMenuInfo) {
+        guard let id = tabIDs[ObjectIdentifier(tab as AnyObject)], id == store.activeTabID || id == agentPrivateTabID, let l = live[id], let window else { return }
+        let menu = contextMenu(for: info, tab: tab, id: id)
+        if let log = ProcessInfo.processInfo.environment["PANE_DEBUG_CONTEXT_LOG"] {  // test runs record the menu instead of showing it
+            try? ("link=\(info.link) media=\(String(describing: info.media)) editable=\(info.isEditable) items=\(menu.items.count)").write(toFile: log, atomically: true, encoding: .utf8); return
+        }
+        menu.popUp(positioning: nil, at: l.container.convert(window.mouseLocationOutsideOfEventStream, from: nil), in: l.container)
+    }
+
+    func contextMenu(for info: ContextMenuInfo, tab: BrowserTab, id: UUID) -> NSMenu {
+        let page = store.tab(id)?.url ?? info.pageURL
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        /// `title` is already in the user's language.
+        func add(_ title: String, _ symbol: String? = nil, enabled: Bool = true, _ run: @escaping () -> Void) { menu.addItem(ActionItem(title, symbol: symbol, enabled: enabled, run)) }
+        func sep() { if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) } }
+        func copyText(_ s: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
+
+        if !info.misspelledWord.isEmpty {
+            for s in info.suggestions { menu.addItem(ActionItem(s, bold: true) { tab.replaceMisspelling(s) }) }
+            if info.suggestions.isEmpty { add(tr("No guesses found"), enabled: false) {} }
+            add(tr("Add to Dictionary"), "text.book.closed") { tab.addToDictionary(info.misspelledWord) }
+            sep()
+        }
+        if info.hasLink, !info.link.isEmpty {
+            add(tr("Open Link in New Tab"), "plus.square.on.square") { [weak self] in self?.open(info.link, newTab: true) }
+            add(tr("Open Link in Background Tab"), "square.on.square") { [weak self] in self?.store.addTab(url: info.link, activate: false) }
+            sep()
+            add(tr("Copy Link Address"), "link") { copyText(info.link) }
+            if !info.linkText.isEmpty { add(tr("Copy Link Text"), "textformat") { copyText(info.linkText) } }
+            add(tr("Add Link to Bookmarks"), "star") { [weak self] in
+                guard let self, !self.isPrivate else { return }
+                self.bookmarks.add(title: info.linkText.isEmpty ? (URL(string: info.link)?.host ?? info.link) : info.linkText, url: info.link)
+                ToastView.show(in: self.webHost, message: "Added to Bookmarks Bar", symbol: "star.fill", duration: 2)
+            }
+            add(tr("Download Linked File"), "arrow.down.circle") { tab.downloadURL(info.link) }
+            sep()
+        }
+        if let media = info.media, !info.mediaSource.isEmpty {
+            switch media {
+            case .image:
+                add(tr("Open Image in New Tab"), "photo") { [weak self] in self?.open(info.mediaSource, newTab: true) }
+                add(tr("Save Image As…"), "square.and.arrow.down") { tab.downloadURL(info.mediaSource) }
+                add(tr("Copy Image"), "doc.on.doc") { Self.copyImage(info.mediaSource) }
+                add(tr("Copy Image Address"), "link") { copyText(info.mediaSource) }
+                add(tr("Search the Web for This Image"), "magnifyingglass") { [weak self] in
+                    self?.open("https://lens.google.com/uploadbyurl?url=" + (info.mediaSource.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""), newTab: true)
+                }
+            case .video, .audio:
+                add(tr(media == .video ? "Open Video in New Tab" : "Open Audio in New Tab"), "play.rectangle") { [weak self] in self?.open(info.mediaSource, newTab: true) }
+                add(tr(media == .video ? "Save Video As…" : "Save Audio As…"), "square.and.arrow.down") { tab.downloadURL(info.mediaSource) }
+                add(tr(media == .video ? "Copy Video Address" : "Copy Audio Address"), "link") { copyText(info.mediaSource) }
+                if media == .video { add(tr("Picture in Picture"), "pip") { [weak self] in self?.togglePictureInPicture(nil) } }
+            }
+            sep()
+        }
+        let selection = info.selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selection.isEmpty {
+            let short = selection.count > 24 ? String(selection.prefix(24)) + "…" : selection
+            let engineName = settings.searchEngine.name
+            add(tr("Copy"), "doc.on.doc") { tab.performEdit(.copy) }
+            add(String(localized: "Search \(engineName) for “\(short)”"), "magnifyingglass") { [weak self] in
+                guard let self, let url = AddressInput.resolve(selection, engine: self.settings.searchEngine) else { return }
+                self.open(url, newTab: true)
+            }
+            if selection.count < 60, !selection.contains("\n") {
+                add(String(localized: "Look Up “\(short)”"), "character.book.closed") {
+                    if let q = selection.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed), let u = URL(string: "dict://\(q)") { NSWorkspace.shared.open(u) }
+                }
+            }
+            if assistantSession.isConfigured {
+                add(tr("Ask the Assistant About This"), "sparkles") { [weak self] in
+                    guard let self else { return }
+                    if !self.assistantOpen { self.toggleAssistant(nil) }
+                    self.assistantModel.mode = .ask
+                    self.assistantSession.send(String(localized: "Explain this: “\(String(selection.prefix(1500)))”"), contexts: [])
+                }
+            }
+            sep()
+        }
+        if info.isEditable {
+            add(tr("Undo"), "arrow.uturn.backward") { tab.performEdit(.undo) }
+            add(tr("Redo"), "arrow.uturn.forward") { tab.performEdit(.redo) }
+            sep()
+            add(tr("Cut"), "scissors", enabled: !selection.isEmpty) { tab.performEdit(.cut) }
+            add(tr("Copy"), "doc.on.doc", enabled: !selection.isEmpty) { tab.performEdit(.copy) }
+            add(tr("Paste"), "doc.on.clipboard") { tab.performEdit(.paste) }
+            add(tr("Paste as Plain Text"), "doc.plaintext") { tab.performEdit(.pasteplain) }
+            add(tr("Select All"), "selection.pin.in.out") { tab.performEdit(.selectAll) }
+            sep()
+        }
+        // What you can do with the page itself.
+        let state = navState[id] ?? LoadingState()
+        if !info.isEditable {
+            add(tr("Back"), "chevron.left", enabled: state.canGoBack) { tab.goBack() }
+            add(tr("Forward"), "chevron.right", enabled: state.canGoForward) { tab.goForward() }
+            add(tr(state.isLoading ? "Stop" : "Reload Page"), state.isLoading ? "xmark" : "arrow.clockwise") { state.isLoading ? tab.stop() : tab.reload() }
+            sep()
+        }
+        if page.hasPrefix("http"), !info.isEditable {
+            let marked = bookmarks.isBookmarked(page)
+            add(tr(marked ? "Remove Bookmark" : "Bookmark This Page"), marked ? "star.slash" : "star") { [weak self] in self?.bookmarkThisPage(nil) }
+            add(tr("Copy Page Address"), "link") { copyText(page) }
+            add(tr("Note for This Page…"), "note.text") { [weak self] in self?.addNote(nil) }
+            sep()
+            add(tr("Translate Page"), "character.bubble", enabled: assistantSession.isConfigured) { [weak self] in self?.translatePage(nil) }
+            add(tr("Reader Mode"), "doc.text") { [weak self] in self?.toggleReader(nil) }
+            add(tr("Summarize Page"), "sparkles", enabled: assistantSession.isConfigured) { [weak self] in self?.summarizePage(nil) }
+            sep()
+            add(tr("Save Page as PDF…"), "doc.richtext") { [weak self] in self?.savePageAsPDF(nil) }
+            add(tr("Print…"), "printer") { tab.printPage() }
+            sep()
+            add(tr("View Source"), "chevron.left.forwardslash.chevron.right") { [weak self] in self?.viewSource(nil) }
+        }
+        add(tr("Inspect Element"), "wrench.and.screwdriver") { tab.showDevTools() }
+        return menu
+    }
+
+    private static func copyImage(_ source: String) {
+        Task.detached {
+            var image: NSImage?
+            if source.hasPrefix("data:"), let comma = source.firstIndex(of: ","), let d = Data(base64Encoded: String(source[source.index(after: comma)...])) { image = NSImage(data: d) }
+            else if let url = URL(string: source), let (d, _) = try? await URLSession.shared.data(from: url) { image = NSImage(data: d) }
+            guard let image else { return }
+            await MainActor.run { NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([image]) }
+        }
+    }
+
+    // MARK: Permissions, sign-in, certificates, fullscreen
+
+    private var grantedPermissions: [String: Bool] = [:]   // "origin|kind" → decision, for this session
+
+    public func tab(_ tab: BrowserTab, requestsPermission origin: String, kinds: [String], decide: @escaping @MainActor (Bool) -> Void) {
+        guard let window, !kinds.isEmpty else { decide(false); return }
+        if let forced = ProcessInfo.processInfo.environment["PANE_DEBUG_PERMISSIONS"] { decide(forced == "allow"); return }  // test runs answer without a dialog
+        let host = URL(string: origin)?.host ?? origin
+        let known = kinds.compactMap { grantedPermissions["\(origin)|\($0)"] }
+        if known.count == kinds.count { decide(!known.contains(false)); return }
+        let words: [String: String] = ["camera": tr("camera"), "microphone": tr("microphone"), "location": tr("location"), "clipboard": tr("clipboard"),
+                                       "midi": tr("MIDI devices"), "fonts": tr("installed fonts"), "files": tr("files on this Mac")]
+        let what = ListFormatter.localizedString(byJoining: kinds.map { words[$0] ?? $0 })
+        let alert = NSAlert()
+        alert.messageText = String(localized: "“\(host)” wants to use your \(what)")
+        alert.informativeText = tr("You can change this for every site at any time in the page's permissions.")
+        alert.addButton(withTitle: tr("Allow")); alert.addButton(withTitle: tr("Don't Allow"))
+        alert.buttons[1].keyEquivalent = "\u{1b}"
+        let remember = NSButton(checkboxWithTitle: tr("Remember until I quit Pane"), target: nil, action: nil)
+        alert.accessoryView = remember
+        alert.beginSheetModal(for: window) { [weak self] response in
+            let allow = response == .alertFirstButtonReturn
+            if remember.state == .on { kinds.forEach { self?.grantedPermissions["\(origin)|\($0)"] = allow } }
+            decide(allow)
+        }
+    }
+
+    public func tab(_ tab: BrowserTab, requestsLoginFor host: String, realm: String, isProxy: Bool, complete: @escaping @MainActor (String?, String?) -> Void) {
+        guard let window else { complete(nil, nil); return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Sign in to \(host)")
+        alert.informativeText = realm.isEmpty ? (isProxy ? tr("The proxy server asks for a user name and password.") : tr("The site asks for a user name and password."))
+                                              : String(localized: "“\(realm)” asks for a user name and password.")
+        alert.addButton(withTitle: tr("Sign In")); alert.addButton(withTitle: tr("Cancel"))
+        let user = NSTextField(frame: NSRect(x: 0, y: 30, width: 260, height: 24)); user.placeholderString = tr("User name")
+        let pass = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24)); pass.placeholderString = tr("Password")
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 58)); box.addSubview(user); box.addSubview(pass)
+        alert.accessoryView = box
+        alert.window.initialFirstResponder = user
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn { complete(user.stringValue, pass.stringValue) } else { complete(nil, nil) }
+        }
+    }
+
+    public func tab(_ tab: BrowserTab, certificateProblemFor url: String, proceed: @escaping @MainActor (Bool) -> Void) {
+        guard let window else { proceed(false); return }
+        let host = URL(string: url)?.host ?? url
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "The connection to “\(host)” isn't private")
+        alert.informativeText = tr("Pane can't confirm this site is who it claims to be. Someone on the network could be reading or changing what you send. Don't enter passwords or card numbers here.")
+        alert.addButton(withTitle: tr("Go Back")); alert.addButton(withTitle: tr("Continue Anyway"))
+        alert.buttons[1].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { response in proceed(response == .alertSecondButtonReturn) }
+    }
+
+    private var fullscreenHost: NSView?
+    private var fullscreenSaved: (id: UUID, constraints: [NSLayoutConstraint], enteredWindowFullscreen: Bool)?
+
+    /// A page went fullscreen (a video, a presentation): its view takes the whole window and the window goes fullscreen with it.
+    public func tab(_ tab: BrowserTab, fullscreenChanged on: Bool) {
+        guard let id = tabIDs[ObjectIdentifier(tab as AnyObject)], let l = live[id], let root = rootView else { return }
+        if on, fullscreenSaved == nil {
+            let host = NSView()
+            host.wantsLayer = true; host.layer?.backgroundColor = NSColor.black.cgColor
+            host.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(host)
+            NSLayoutConstraint.activate([host.leadingAnchor.constraint(equalTo: root.leadingAnchor), host.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+                                         host.topAnchor.constraint(equalTo: root.topAnchor), host.bottomAnchor.constraint(equalTo: root.bottomAnchor)])
+            let pins = webHost.constraints.filter { $0.firstItem === l.container || $0.secondItem === l.container }
+            NSLayoutConstraint.deactivate(pins)
+            host.addSubview(l.container)
+            NSLayoutConstraint.activate([l.container.leadingAnchor.constraint(equalTo: host.leadingAnchor), l.container.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                                         l.container.topAnchor.constraint(equalTo: host.topAnchor), l.container.bottomAnchor.constraint(equalTo: host.bottomAnchor)])
+            let wasFull = window?.styleMask.contains(.fullScreen) ?? false
+            if !wasFull { window?.toggleFullScreen(nil) }
+            fullscreenHost = host
+            fullscreenSaved = (id, pins, !wasFull)
+        } else if !on, let saved = fullscreenSaved, let host = fullscreenHost {
+            fullscreenSaved = nil; fullscreenHost = nil
+            if let l2 = live[saved.id] {
+                l2.container.removeFromSuperview()
+                webHost.addSubview(l2.container)
+                NSLayoutConstraint.activate(saved.constraints)
+            }
+            host.removeFromSuperview()
+            if saved.enteredWindowFullscreen, window?.styleMask.contains(.fullScreen) == true { window?.toggleFullScreen(nil) }
+            showActive()
+        }
     }
 
     public func tab(_ tab: BrowserTab, processTerminated reason: String) {

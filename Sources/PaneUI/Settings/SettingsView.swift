@@ -18,6 +18,9 @@ struct SettingsActions {
     var clearAssistantKey: () -> Void
     var testAssistant: () async -> (ok: Bool, text: String)
     var vault: PasswordVault
+    var clearBrowsingData: () async -> Void
+    var isDefaultBrowser: () -> Bool
+    var makeDefaultBrowser: () -> Void
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable {
@@ -99,7 +102,7 @@ struct SettingsRoot: View {
         } detail: {
             Group {
                 switch selection {
-                case .general: GeneralPane(settings: settings)
+                case .general: GeneralPane(settings: settings, actions: actions)
                 case .search: SearchPane(settings: settings)
                 case .appearance: AppearancePane(settings: settings)
                 case .assistant: AssistantPane(settings: settings, actions: actions)
@@ -121,6 +124,8 @@ struct SettingsRoot: View {
 
 struct GeneralPane: View {
     @ObservedObject var settings: AppSettings
+    let actions: SettingsActions
+    @State private var isDefault = false
     @State private var language = AppLanguage.chosen
     private let sleepChoices: [(String, Int)] = [("Never", 0), ("After 10 minutes", 10), ("After 30 minutes", 30), ("After 1 hour", 60), ("After 3 hours", 180)]
 
@@ -138,6 +143,18 @@ struct GeneralPane: View {
                         Spacer()
                         Button("Restart Now") { Relauncher.relaunch() }
                     }
+                }
+            }
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Default browser")
+                        Text(isDefault ? "Pane opens the links you click in other apps." : "Links you click in Mail, Messages and other apps open in another browser.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isDefault { Label("Pane is the default", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout) }
+                    else { Button("Make Default") { actions.makeDefaultBrowser(); DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { isDefault = actions.isDefaultBrowser() } } }
                 }
             }
             Section("Startup") {
@@ -168,6 +185,7 @@ struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { isDefault = actions.isDefaultBrowser() }
     }
 }
 
@@ -363,6 +381,9 @@ struct PrivacyPane: View {
     @ObservedObject var vault: PasswordVault
     @State private var confirm = false
     @State private var count = 0
+    @State private var confirmClearData = false
+    @State private var clearingData = false
+    @State private var clearedData = false
     var body: some View {
         Form {
             Section {
@@ -391,6 +412,16 @@ struct PrivacyPane: View {
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
+                        Text("Cookies and cached files")
+                        Text(clearedData ? "Cleared. Sites will ask you to sign in again." : "Signs you out of most sites and frees disk space.").font(.caption).foregroundStyle(clearedData ? .green : .secondary)
+                    }
+                    Spacer()
+                    Button("Clear…", role: .destructive) { confirmClearData = true }.disabled(clearingData)
+                }
+            } header: { Text("Browsing data") }
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("Browsing history")
                         Text("\(count) pages remembered on this Mac").font(.caption).foregroundStyle(.secondary)
                     }
@@ -403,6 +434,13 @@ struct PrivacyPane: View {
         }
         .formStyle(.grouped)
         .onAppear { count = actions.historyCount() }
+        .confirmationDialog("Clear cookies and cached files?", isPresented: $confirmClearData, titleVisibility: .visible) {
+            Button("Clear Cookies and Cache", role: .destructive) {
+                clearingData = true
+                Task { await actions.clearBrowsingData(); clearingData = false; clearedData = true }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("You will be signed out of most sites.") }
         .confirmationDialog("Clear all browsing history?", isPresented: $confirm, titleVisibility: .visible) {
             Button("Clear History", role: .destructive) { actions.clearHistory(); count = actions.historyCount() }
             Button("Cancel", role: .cancel) {}

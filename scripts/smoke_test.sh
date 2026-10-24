@@ -34,7 +34,7 @@ grep -q survived "$OUT/stress-stress.txt" 2>/dev/null && pass "survived 3 rounds
 grep -q "tabs=1 live=1" "$OUT/stress-stress.txt" 2>/dev/null && pass "no leaked pages" || fail "pages leaked"
 
 echo "Features"
-run features 14 PANE_DEBUG_FEATURES=1
+run features 30 PANE_DEBUG_FEATURES=1
 F="$OUT/features-features.txt"
 grep -q "bookmarked=true" "$F" 2>/dev/null && pass "bookmark + star pulse" || fail "bookmark"
 grep -q "history snippet: ad:" "$F" 2>/dev/null && pass "page text remembered for search" || fail "page text snippet"
@@ -44,6 +44,13 @@ run pdf 14 PANE_DEBUG_PDF=1
 grep -q "overlay shown: true" "$OUT/pdf-pdf.txt" 2>/dev/null && pass "PDF viewer" || fail "PDF viewer"
 run pip 12 PANE_DEBUG_PIP=1
 grep -q "opened pip=true" "$OUT/pip-pip.txt" 2>/dev/null && pass "picture in picture" || fail "picture in picture"
+
+run ctx 10 PANE_DEBUG_RIGHTCLICK=1 PANE_DEBUG_CONTEXT_LOG="$OUT/ctx.txt"
+grep -q "items=" "$OUT/ctx.txt" 2>/dev/null && pass "right-click menu" || fail "right-click menu"
+run probe 40 PANE_DEBUG_PROBE=1 PANE_DEBUG_PERMISSIONS=deny
+grep -q 'done' "$OUT/probe-probe.txt" 2>/dev/null && ! grep -q TIMEOUT "$OUT/probe-probe.txt" && pass "permission requests answered (camera, location, notifications)" || fail "permission requests hang"
+run fs 20 PANE_DEBUG_FULLSCREEN=1
+grep -q "containerParentIsHost=true" "$OUT/fs-fullscreen.txt" 2>/dev/null && grep -q "after exit: window=false host=false containerParentIsWebHost=true" "$OUT/fs-fullscreen.txt" 2>/dev/null && pass "HTML fullscreen in and out" || fail "HTML fullscreen"
 
 echo "Quitting"
 rm -rf "$OUT/support"; mkdir -p "$OUT/support"

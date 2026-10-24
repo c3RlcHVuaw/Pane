@@ -1,0 +1,17 @@
+<!doctype html><title>probe</title><body><input type=file id=f><a id=a target=_blank href="/form.html">blank</a>
+<script>
+window.results = {};
+async function run() {
+  const r = window.results;
+  const timeout = (p, ms) => Promise.race([p, new Promise(res => setTimeout(() => res('TIMEOUT'), ms))]);
+  r.geolocation = await timeout(new Promise(res => navigator.geolocation.getCurrentPosition(() => res('granted'), e => res('denied:' + e.code), {timeout: 2500})), 3500);
+  r.media = await timeout(navigator.mediaDevices.getUserMedia({audio: true}).then(() => 'granted', e => 'denied:' + e.name), 3500);
+  r.notifications = await timeout(Notification.requestPermission(), 3000);
+  r.fullscreen = await timeout(document.documentElement.requestFullscreen().then(() => 'ok:' + !!document.fullscreenElement, e => 'denied:' + e.name), 3000);
+  try { await document.exitFullscreen(); } catch (e) {}
+  r.clipboardWrite = await timeout(navigator.clipboard.writeText('x').then(() => 'ok', e => 'denied:' + e.name), 2000);
+  r.fileInput = !!document.getElementById('f');
+  r.done = true;
+}
+run();
+</script>

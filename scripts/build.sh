@@ -40,6 +40,12 @@ plist "Pane" "com.pane.browser" "Pane" "<key>NSPrincipalClass</key><string>PCApp
 <key>CFBundleLocalizations</key><array><string>en</string><string>ru</string></array>
 <key>PaneUpdateFeed</key><string>$FEED</string>
 <key>NSCameraUsageDescription</key><string>Web pages can ask to use the camera.</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>Web pages can ask for your location.</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>Web address</string><key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array></dict></array>
+<key>CFBundleDocumentTypes</key><array>
+<dict><key>CFBundleTypeName</key><string>HTML document</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSItemContentTypes</key><array><string>public.html</string><string>public.xhtml</string></array></dict>
+<dict><key>CFBundleTypeName</key><string>PDF document</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array></dict>
+</array>
 <key>NSMicrophoneUsageDescription</key><string>Pane uses the microphone for dictation in the assistant, and when a web page asks to.</string><key>NSSpeechRecognitionUsageDescription</key><string>Pane turns your speech into text for the assistant.</string>" > "$APP/Contents/Info.plist"
 cp "$BIN/Pane" "$APP/Contents/MacOS/Pane"
 mkdir -p "$APP/Contents/Resources"

@@ -25,6 +25,11 @@ public final class CEFEngine: BrowserEngine {
 
     public func shutdown() { PCRuntime.shutdown() }
     public func setContentBlocking(_ on: Bool) { PCRuntime.setAdBlocking(on) }
+    public func clearBrowsingData(for profile: BrowserProfile) async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            PCRuntime.clearBrowsingData(in: profile.engineHandle as? PCContext) { c.resume() }
+        }
+    }
 }
 
 /// Resumes a continuation exactly once, whichever of "text arrived" and "timed out" comes first.
@@ -70,6 +75,11 @@ final class CEFTab: NSObject, BrowserTab, PCBrowserDelegate {
     }
     func cancelDownload(id: Int) { browser.cancelDownload(UInt32(id)) }
     func printPage() { browser.printPage() }
+    func showDevTools() { browser.showDevTools() }
+    func performEdit(_ command: EditCommand) { browser.performEdit(command.rawValue) }
+    func downloadURL(_ url: String) { browser.downloadURL(url) }
+    func replaceMisspelling(_ word: String) { browser.replaceMisspelling(word) }
+    func addToDictionary(_ word: String) { browser.add(toDictionary: word) }
 
     func devTools(_ method: String, params: String?) async throws -> String {
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<String, Error>) in
@@ -101,6 +111,23 @@ final class CEFTab: NSObject, BrowserTab, PCBrowserDelegate {
     func browserFindResultCount(_ count: Int, active: Int) { delegate?.tab(self, findResultCount: count, active: active) }
     func browserStatusChanged(_ text: String) { delegate?.tab(self, statusChanged: text) }
     func browserPageMessage(_ message: String) { delegate?.tab(self, didSendPageMessage: message) }
+    func browserRequestsPermission(_ origin: String, kinds: [String], decision: @escaping (Bool) -> Void) {
+        delegate?.tab(self, requestsPermission: origin, kinds: kinds) { decision($0) } ?? decision(false)
+    }
+    func browserRequestsLogin(_ host: String, realm: String, isProxy: Bool, completion: @escaping (String?, String?) -> Void) {
+        delegate?.tab(self, requestsLoginFor: host, realm: realm, isProxy: isProxy) { completion($0, $1) } ?? completion(nil, nil)
+    }
+    func browserCertificateProblem(_ url: String, reason: String, proceed: @escaping (Bool) -> Void) {
+        delegate?.tab(self, certificateProblemFor: url) { proceed($0) } ?? proceed(false)
+    }
+    func browserFullscreenChanged(_ on: Bool) { delegate?.tab(self, fullscreenChanged: on) }
+    func browserShowsContextMenu(_ info: [AnyHashable: Any]) {
+        func str(_ k: String) -> String { info[k] as? String ?? "" }
+        delegate?.tab(self, showsContextMenu: ContextMenuInfo(
+            link: str("link"), linkText: str("linkText"), mediaSource: str("source"), media: (info["media"] as? String).flatMap(ContextMenuInfo.Media.init(rawValue:)),
+            selection: str("selection"), isEditable: info["editable"] as? Bool ?? false, hasLink: info["hasLink"] as? Bool ?? false,
+            misspelledWord: str("misspelled"), suggestions: info["suggestions"] as? [String] ?? [], pageURL: str("page")))
+    }
     func browserRenderProcessTerminated(_ reason: String) { delegate?.tab(self, processTerminated: reason) }
     func browserRequestsNewTab(_ url: String) { delegate?.tab(self, requestsNewTabWith: url) }
 }

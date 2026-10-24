@@ -22,6 +22,17 @@ NS_SWIFT_UI_ACTOR
 - (void)browserStatusChanged:(NSString *)text;
 /// A line the page's Pane script wrote to the console ("__pane:…"); never page content the user wrote.
 - (void)browserPageMessage:(NSString *)message;
+@optional
+/// A page asks for a permission (camera, microphone, location, clipboard…). `kinds` are plain words such as "camera"; call `decision` once.
+- (void)browserRequestsPermission:(NSString *)origin kinds:(NSArray<NSString *> *)kinds decision:(void (^)(BOOL allow))decision;
+/// A server asks for a user name and password (HTTP authentication).
+- (void)browserRequestsLogin:(NSString *)host realm:(NSString *)realm isProxy:(BOOL)isProxy completion:(void (^)(NSString *_Nullable user, NSString *_Nullable password))completion;
+/// The page's certificate is not trusted. Call `proceed(YES)` to continue anyway.
+- (void)browserCertificateProblem:(NSString *)url reason:(NSString *)reason proceed:(void (^)(BOOL))proceed;
+/// The page entered or left HTML fullscreen (a video, a presentation).
+- (void)browserFullscreenChanged:(BOOL)on;
+/// The user right-clicked the page. `info` has link, media, selection, editable, misspelled word and suggestions; the app shows its own menu.
+- (void)browserShowsContextMenu:(NSDictionary *)info;
 /// The page's renderer process died (crash, out of memory or killed).
 - (void)browserRenderProcessTerminated:(NSString *)reason;
 @end
@@ -68,6 +79,14 @@ NS_SWIFT_UI_ACTOR
 - (void)close;
 /// Closes the page; `completion` runs on the main thread once Chromium has released its view. Keep the parent view alive until then.
 - (void)closeWithCompletion:(void (^)(void))completion;
+/// Opens Chromium's developer tools for this page in a window of their own.
+- (void)showDevTools;
+/// Runs an editing command in the focused frame: undo, redo, cut, copy, paste, pasteplain, delete, selectAll.
+- (void)performEdit:(NSString *)command;
+/// Downloads the file at `url` (the normal download flow runs).
+- (void)downloadURL:(NSString *)url;
+- (void)replaceMisspelling:(NSString *)word;
+- (void)addToDictionary:(NSString *)word;
 @end
 
 NS_SWIFT_UI_ACTOR
@@ -77,6 +96,8 @@ NS_SWIFT_UI_ACTOR
 + (void)shutdown;
 /// Refuses sub-requests to known ad and tracker hosts. On by default.
 + (void)setAdBlocking:(BOOL)on;
+/// Deletes cookies and the cache of the default storage (and of `context` when given).
++ (void)clearBrowsingDataIn:(nullable PCContext *)context completion:(void (^)(void))completion;
 /// Entry point for helper (renderer/GPU/...) processes. Returns the process exit code.
 + (int)runHelperWithArgc:(int)argc argv:(char *_Nullable *_Nonnull)argv;
 @end

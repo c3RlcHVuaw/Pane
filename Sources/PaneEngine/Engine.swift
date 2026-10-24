@@ -18,6 +18,46 @@ public protocol BrowserTabDelegate: AnyObject {
     func tab(_ tab: BrowserTab, processTerminated reason: String)
     /// A message from Pane's own page script (see PasswordScripts). The text starts with "__pane:".
     func tab(_ tab: BrowserTab, didSendPageMessage message: String)
+    /// A page asks for camera, microphone, location, clipboard… (`kinds` are plain words). Call `decide` exactly once.
+    func tab(_ tab: BrowserTab, requestsPermission origin: String, kinds: [String], decide: @escaping @MainActor (Bool) -> Void)
+    /// A server wants a user name and password. Call `complete(nil, nil)` to cancel.
+    func tab(_ tab: BrowserTab, requestsLoginFor host: String, realm: String, isProxy: Bool, complete: @escaping @MainActor (_ user: String?, _ password: String?) -> Void)
+    /// The page's certificate isn't trusted. `proceed(true)` continues anyway.
+    func tab(_ tab: BrowserTab, certificateProblemFor url: String, proceed: @escaping @MainActor (Bool) -> Void)
+    /// The page entered or left HTML fullscreen.
+    func tab(_ tab: BrowserTab, fullscreenChanged on: Bool)
+    /// The user right-clicked the page; show a menu for what is under the pointer.
+    func tab(_ tab: BrowserTab, showsContextMenu info: ContextMenuInfo)
+}
+
+/// What is under the pointer when the page is right-clicked.
+public struct ContextMenuInfo: Sendable {
+    public enum Media: String, Sendable { case image, video, audio }
+    public var link: String
+    public var linkText: String
+    public var mediaSource: String
+    public var media: Media?
+    public var selection: String
+    public var isEditable: Bool
+    public var hasLink: Bool
+    public var misspelledWord: String
+    public var suggestions: [String]
+    public var pageURL: String
+    public init(link: String = "", linkText: String = "", mediaSource: String = "", media: Media? = nil, selection: String = "", isEditable: Bool = false,
+                hasLink: Bool = false, misspelledWord: String = "", suggestions: [String] = [], pageURL: String = "") {
+        self.link = link; self.linkText = linkText; self.mediaSource = mediaSource; self.media = media; self.selection = selection
+        self.isEditable = isEditable; self.hasLink = hasLink; self.misspelledWord = misspelledWord; self.suggestions = suggestions; self.pageURL = pageURL
+    }
+}
+
+public enum EditCommand: String, Sendable { case undo, redo, cut, copy, paste, pasteplain = "pasteplain", delete, selectAll }
+
+public extension BrowserTabDelegate {
+    func tab(_ tab: BrowserTab, requestsPermission origin: String, kinds: [String], decide: @escaping @MainActor (Bool) -> Void) { decide(false) }
+    func tab(_ tab: BrowserTab, requestsLoginFor host: String, realm: String, isProxy: Bool, complete: @escaping @MainActor (String?, String?) -> Void) { complete(nil, nil) }
+    func tab(_ tab: BrowserTab, certificateProblemFor url: String, proceed: @escaping @MainActor (Bool) -> Void) { proceed(false) }
+    func tab(_ tab: BrowserTab, fullscreenChanged on: Bool) {}
+    func tab(_ tab: BrowserTab, showsContextMenu info: ContextMenuInfo) {}
 }
 
 public struct PageError: Error, LocalizedError, Sendable {
@@ -73,6 +113,12 @@ public protocol BrowserTab: AnyObject {
     func stopFinding()
     func cancelDownload(id: Int)
     func printPage()
+    /// Opens the page's developer tools in a window of their own.
+    func showDevTools()
+    func performEdit(_ command: EditCommand)
+    func downloadURL(_ url: String)
+    func replaceMisspelling(_ word: String)
+    func addToDictionary(_ word: String)
     /// Sends a Chrome DevTools Protocol command to the page and returns its result JSON.
     func devTools(_ method: String, params: String?) async throws -> String
     func savePDF(to url: URL) async -> Bool
@@ -103,4 +149,6 @@ public protocol BrowserEngine: AnyObject {
     func shutdown()
     /// Blocks requests to known ad and tracker hosts.
     func setContentBlocking(_ on: Bool)
+    /// Deletes cookies and cached files of a profile.
+    func clearBrowsingData(for profile: BrowserProfile) async
 }

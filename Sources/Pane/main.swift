@@ -142,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if env["PANE_DEBUG_TRANSLATE"] != nil { Task { @MainActor in try? (await win?.debugTranslate() ?? "").write(toFile: prefix + "-translate.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_PIP"] != nil { Task { @MainActor in try? (await win?.debugPiP() ?? "").write(toFile: prefix + "-pip.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_PDF"] != nil { Task { @MainActor in try? (await win?.debugPDF() ?? "").write(toFile: prefix + "-pdf.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_PROBE"] != nil { Task { @MainActor in try? (await win?.debugProbe() ?? "").write(toFile: prefix + "-probe.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_FULLSCREEN"] != nil { Task { @MainActor in try? (await win?.debugFullscreen() ?? "").write(toFile: prefix + "-fullscreen.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_CONTEXT"] != nil { Task { @MainActor in try? (await win?.debugContextMenus() ?? "").write(toFile: prefix + "-context.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_RIGHTCLICK"] != nil { Task { @MainActor in await win?.debugRightClick() } }
                     if env["PANE_DEBUG_PEEK"] != nil { win?.debugPeek() }
                     if env["PANE_DEBUG_FOCUS_ADDRESS"] != nil { win?.focusAddressBar() }
                     if env["PANE_DEBUG_HOVER"] != nil { win?.debugHoverToolbar() }
@@ -149,6 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if let q = env["PANE_DEBUG_SUGGEST"] { win?.debugShowSuggestions(query: q) }
                     if let t = env["PANE_DEBUG_AGENT_TASK"] { win?.debugAgent(task: t, autoApprove: env["PANE_DEBUG_AGENT_APPROVE"] != nil) }
                     if let a = env["PANE_DEBUG_ASSISTANT"] { win?.debugAssistant(question: a == "demo" ? "Summarize this page" : nil) }
+                }
+            }
+            if env["PANE_SNAPSHOT_REAL"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(2, (env["PANE_SNAPSHOT_DELAY"].flatMap(Double.init) ?? 8) - 1.5)) {
+                    MainActor.assumeIsolated { Task { @MainActor in try? (await win?.debugRealSnapshot(to: prefix + "-real.png") ?? "").write(toFile: prefix + "-real.txt", atomically: true, encoding: .utf8) } }
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + (env["PANE_SNAPSHOT_DELAY"].flatMap(Double.init) ?? 8)) {
@@ -183,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let q = ProcessInfo.processInfo.environment["PANE_DEBUG_PALETTE"] { window?.debugShowPalette(query: q == "-" ? "" : q) }
         // PANE_ONSCREEN_TEST: keep a test window where it can be drawn (a window nobody sees never runs the display cycle),
         // but don't take focus.
+        if let w = env["PANE_DEBUG_WIDTH"].flatMap(Double.init) { controllers.forEach { $0.window?.setContentSize(NSSize(width: w, height: 760)) } }
         if env["PANE_ONSCREEN_TEST"] != nil { controllers.forEach { $0.window?.setFrameOrigin(NSPoint(x: 80, y: 120)); if env["PANE_ONSCREEN_FRONT"] != nil { $0.window?.orderFrontRegardless() } else { $0.window?.orderBack(nil) } } }
         else if env["PANE_OFFSCREEN"] != nil { controllers.forEach { $0.window?.setFrameOrigin(NSPoint(x: -4000, y: 300)) } } else { NSApp.activate() }
     }
@@ -199,6 +209,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.accessoryView = scroll
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { _ = await CrashReporter.send(summary, to: url) }
+    }
+
+    /// Links and files from other apps.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        (active ?? controllers.first)?.openExternal(urls)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
@@ -344,6 +359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func nextWorkspace(_ s: Any?) { active?.nextWorkspace(s) }
     @objc func previousWorkspace(_ s: Any?) { active?.previousWorkspace(s) }
     @objc func toggleReader(_ s: Any?) { active?.toggleReader(s) }
+    @objc func showDevTools(_ s: Any?) { active?.showDevTools(s) }
+    @objc func viewSource(_ s: Any?) { active?.viewSource(s) }
     @objc func addNote(_ s: Any?) { active?.addNote(s) }
     @objc func togglePictureInPicture(_ s: Any?) { active?.togglePictureInPicture(s) }
     @objc func showHistory(_ s: Any?) { active?.showHistory(s) }
@@ -432,6 +449,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("Translate Page", #selector(translatePage(_:)), "t", target: self, mods: [.command, .option]),
             item("Picture in Picture", #selector(togglePictureInPicture(_:)), "p", target: self, mods: [.command, .option]),
             item("Note for This Page…", #selector(addNote(_:)), "n", target: self, mods: [.command, .option, .control]),
+            item("Developer Tools", #selector(showDevTools(_:)), "i", target: self, mods: [.command, .option]),
+            item("View Source", #selector(viewSource(_:)), "u", target: self, mods: [.command, .option]),
             item("Reader Mode", #selector(toggleReader(_:)), "r", target: self, mods: [.command, .option]),
             item("Summarize Page", #selector(summarizePage(_:)), "s", target: self, mods: [.command, .option]),
             item("Back", #selector(goBack(_:)), "[", target: self),

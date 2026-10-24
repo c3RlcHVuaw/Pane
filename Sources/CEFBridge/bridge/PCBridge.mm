@@ -9,6 +9,9 @@
 #include "include/cef_application_mac.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_context_menu_handler.h"
+#include "include/cef_cookie.h"
+#include "include/cef_permission_handler.h"
 #include "include/cef_parser.h"
 #include "include/cef_devtools_message_observer.h"
 #include "include/wrapper/cef_helpers.h"
@@ -171,8 +174,28 @@ static bool PCIsBlockedHost(const std::string &host) {
   return false;
 }
 
+/// Words for the permission kinds a page can ask for.
+static NSArray<NSString *> *PCPermissionWords(uint32_t p) {
+  NSMutableArray *k = [NSMutableArray array];
+  if (p & CEF_PERMISSION_TYPE_CAMERA_STREAM) [k addObject:@"camera"];
+  if (p & CEF_PERMISSION_TYPE_MIC_STREAM) [k addObject:@"microphone"];
+  if (p & CEF_PERMISSION_TYPE_GEOLOCATION) [k addObject:@"location"];
+  if (p & CEF_PERMISSION_TYPE_CLIPBOARD) [k addObject:@"clipboard"];
+  if (p & CEF_PERMISSION_TYPE_MIDI_SYSEX) [k addObject:@"midi"];
+  if (p & CEF_PERMISSION_TYPE_LOCAL_FONTS) [k addObject:@"fonts"];
+  if (p & CEF_PERMISSION_TYPE_FILE_SYSTEM_ACCESS) [k addObject:@"files"];
+  return k;
+}
+
+/// Kinds that are granted without asking (they only make sites work), and kinds that are refused outright.
+static const uint32_t kPermissionsAllowed = CEF_PERMISSION_TYPE_STORAGE_ACCESS | CEF_PERMISSION_TYPE_TOP_LEVEL_STORAGE_ACCESS |
+    CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS | CEF_PERMISSION_TYPE_POINTER_LOCK | CEF_PERMISSION_TYPE_KEYBOARD_LOCK |
+    CEF_PERMISSION_TYPE_DISK_QUOTA | CEF_PERMISSION_TYPE_PROTECTED_MEDIA_IDENTIFIER;
+static const uint32_t kPermissionsAsked = CEF_PERMISSION_TYPE_CAMERA_STREAM | CEF_PERMISSION_TYPE_MIC_STREAM | CEF_PERMISSION_TYPE_GEOLOCATION |
+    CEF_PERMISSION_TYPE_CLIPBOARD | CEF_PERMISSION_TYPE_MIDI_SYSEX | CEF_PERMISSION_TYPE_LOCAL_FONTS | CEF_PERMISSION_TYPE_FILE_SYSTEM_ACCESS;
+
 class PCClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler,
-                 public CefAudioHandler, public CefDownloadHandler, public CefRequestHandler, public CefFindHandler, public CefResourceRequestHandler {
+                 public CefAudioHandler, public CefDownloadHandler, public CefRequestHandler, public CefFindHandler, public CefResourceRequestHandler, public CefPermissionHandler, public CefContextMenuHandler {
  public:
   explicit PCClient(PCBrowser *owner) : owner_(owner) {}
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -181,10 +204,97 @@ class PCClient : public CefClient, public CefLifeSpanHandler, public CefDisplayH
   CefRefPtr<CefAudioHandler> GetAudioHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+  CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
+  CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+
+  // MARK: Right-click menu: the app builds it (see BrowserWindowController), so it can offer far more than Chromium's own.
+  bool RunContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams> p, CefRefPtr<CefMenuModel>,
+                      CefRefPtr<CefRunContextMenuCallback> cb) override {
+    PCBrowser *o = owner_;
+    if (![o.delegate respondsToSelector:@selector(browserShowsContextMenu:)]) return false;
+    int flags = p->GetTypeFlags();
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    info[@"link"] = NS(p->GetUnfilteredLinkUrl());
+    info[@"linkText"] = NS(p->GetTitleText());
+    info[@"source"] = NS(p->GetSourceUrl());
+    info[@"page"] = NS(p->GetPageUrl());
+    info[@"selection"] = NS(p->GetSelectionText());
+    info[@"editable"] = @(p->IsEditable());
+    info[@"hasLink"] = @((flags & CM_TYPEFLAG_LINK) != 0);
+    info[@"hasSelection"] = @((flags & CM_TYPEFLAG_SELECTION) != 0);
+    switch (p->GetMediaType()) {
+      case CM_MEDIATYPE_IMAGE: info[@"media"] = @"image"; break;
+      case CM_MEDIATYPE_VIDEO: info[@"media"] = @"video"; break;
+      case CM_MEDIATYPE_AUDIO: info[@"media"] = @"audio"; break;
+      default: break;
+    }
+    info[@"misspelled"] = NS(p->GetMisspelledWord());
+    std::vector<CefString> sug;
+    if (p->GetDictionarySuggestions(sug)) {
+      NSMutableArray *a = [NSMutableArray array];
+      for (size_t i = 0; i < sug.size() && i < 5; i++) [a addObject:NS(sug[i])];
+      info[@"suggestions"] = a;
+    }
+    cb->Cancel();  // Chromium's own menu is not shown
+    dispatch_async(dispatch_get_main_queue(), ^{ [o.delegate browserShowsContextMenu:info]; });
+    return true;
+  }
+
+  // MARK: Permissions (camera, microphone, location…). Without this, Chromium's Alloy style silently refuses everything.
+  bool OnRequestMediaAccessPermission(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString &origin, uint32_t requested,
+                                      CefRefPtr<CefMediaAccessCallback> cb) override {
+    NSMutableArray *kinds = [NSMutableArray array];
+    if (requested & CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE) [kinds addObject:@"camera"];
+    if (requested & CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE) [kinds addObject:@"microphone"];
+    if (requested & (CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE | CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE)) { cb->Cancel(); return true; }  // screen capture isn't offered
+    PCBrowser *o = owner_;
+    if (!kinds.count || ![o.delegate respondsToSelector:@selector(browserRequestsPermission:kinds:decision:)]) { cb->Cancel(); return true; }
+    [o.delegate browserRequestsPermission:NS(origin) kinds:kinds decision:^(BOOL allow) { if (allow) cb->Continue(requested); else cb->Cancel(); }];
+    return true;
+  }
+  bool OnShowPermissionPrompt(CefRefPtr<CefBrowser>, uint64_t, const CefString &origin, uint32_t requested,
+                              CefRefPtr<CefPermissionPromptCallback> cb) override {
+    if ((requested & ~kPermissionsAllowed) == 0) { cb->Continue(CEF_PERMISSION_RESULT_ACCEPT); return true; }
+    if (!(requested & kPermissionsAsked)) { cb->Continue(CEF_PERMISSION_RESULT_DENY); return true; }  // notifications and the rest: not supported
+    PCBrowser *o = owner_;
+    if (![o.delegate respondsToSelector:@selector(browserRequestsPermission:kinds:decision:)]) { cb->Continue(CEF_PERMISSION_RESULT_DENY); return true; }
+    [o.delegate browserRequestsPermission:NS(origin) kinds:PCPermissionWords(requested & kPermissionsAsked)
+                                 decision:^(BOOL allow) { cb->Continue(allow ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY); }];
+    return true;
+  }
+
+  // MARK: Sign-in prompts and certificate problems
+  bool GetAuthCredentials(CefRefPtr<CefBrowser>, const CefString &, bool isProxy, const CefString &host, int, const CefString &realm,
+                          const CefString &, CefRefPtr<CefAuthCallback> cb) override {
+    PCBrowser *o = owner_;
+    if (![o.delegate respondsToSelector:@selector(browserRequestsLogin:realm:isProxy:completion:)]) return false;
+    [o.delegate browserRequestsLogin:NS(host) realm:NS(realm) isProxy:isProxy completion:^(NSString *user, NSString *pass) {
+      if (user) cb->Continue(user.UTF8String, (pass ?: @"").UTF8String); else cb->Cancel();
+    }];
+    return true;
+  }
+  bool OnCertificateError(CefRefPtr<CefBrowser>, cef_errorcode_t, const CefString &url, CefRefPtr<CefSSLInfo>, CefRefPtr<CefCallback> cb) override {
+    PCBrowser *o = owner_;
+    if (![o.delegate respondsToSelector:@selector(browserCertificateProblem:reason:proceed:)]) return false;
+    [o.delegate browserCertificateProblem:NS(url) reason:@"" proceed:^(BOOL go) { if (go) cb->Continue(); else cb->Cancel(); }];
+    return true;
+  }
+
+  void OnFullscreenModeChange(CefRefPtr<CefBrowser>, bool fullscreen) override {
+    if ([owner_.delegate respondsToSelector:@selector(browserFullscreenChanged:)]) [owner_.delegate browserFullscreenChanged:fullscreen];
+  }
 
   CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest>,
                                                                  bool, bool, const CefString &, bool &) override {
     return this;
+  }
+  /// mailto:, tel: and friends open the app the user has for them; unknown schemes are refused.
+  void OnProtocolExecution(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request, bool &allow) override {
+    CefURLParts parts;
+    if (!CefParseURL(request->GetURL(), parts)) return;
+    static NSSet *ok = [NSSet setWithObjects:@"mailto", @"tel", @"sms", @"facetime", @"facetime-audio", @"maps", @"zoommtg", @"zoomus", @"msteams",
+                        @"slack", @"spotify", @"discord", @"notion", @"vscode", @"itms-apps", @"itms", @"music", @"webcal", nil];
+    allow = [ok containsObject:[NS(CefString(&parts.scheme)) lowercaseString]];
   }
   ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request,
                                    CefRefPtr<CefCallback>) override {
@@ -427,6 +537,30 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
 }
 
 - (void)close { [self closeWithCompletion:nil]; }
+
+- (void)performEdit:(NSString *)c {
+  if (!_browser) return;
+  CefRefPtr<CefFrame> f = _browser->GetFocusedFrame() ?: _browser->GetMainFrame();
+  if (!f) return;
+  if ([c isEqualToString:@"undo"]) f->Undo();
+  else if ([c isEqualToString:@"redo"]) f->Redo();
+  else if ([c isEqualToString:@"cut"]) f->Cut();
+  else if ([c isEqualToString:@"copy"]) f->Copy();
+  else if ([c isEqualToString:@"paste"]) f->Paste();
+  else if ([c isEqualToString:@"pasteplain"]) f->PasteAndMatchStyle();
+  else if ([c isEqualToString:@"delete"]) f->Delete();
+  else if ([c isEqualToString:@"selectAll"]) f->SelectAll();
+}
+- (void)downloadURL:(NSString *)url { if (_browser) _browser->GetHost()->StartDownload(url.UTF8String); }
+- (void)replaceMisspelling:(NSString *)word { if (_browser) _browser->GetHost()->ReplaceMisspelling(word.UTF8String); }
+- (void)addToDictionary:(NSString *)word { if (_browser) _browser->GetHost()->AddWordToDictionary(word.UTF8String); }
+
+- (void)showDevTools {
+  if (!_browser) return;
+  CefWindowInfo info;
+  CefBrowserSettings settings;
+  _browser->GetHost()->ShowDevTools(info, nullptr, settings, CefPoint());
+}
 @end
 
 // MARK: - PCApplication
@@ -472,6 +606,20 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
 }
 
 + (void)setAdBlocking:(BOOL)on { g_adBlock.store(on); }
+
++ (void)clearBrowsingDataIn:(PCContext *)context completion:(void (^)(void))completion {
+  struct Done : public CefCompletionCallback {
+    void (^block)(void);
+    explicit Done(void (^b)(void)) : block(b) {}
+    void OnComplete() override { dispatch_async(dispatch_get_main_queue(), block); }
+    IMPLEMENT_REFCOUNTING(Done);
+  };
+  CefRefPtr<CefRequestContext> ctx = context ? [context cefContext] : CefRequestContext::GetGlobalContext();
+  if (!ctx) { completion(); return; }
+  if (CefRefPtr<CefCookieManager> cookies = ctx->GetCookieManager(nullptr)) cookies->DeleteCookies("", "", nullptr);
+  ctx->ClearHttpCache(new Done(completion));
+  ctx->CloseAllConnections(nullptr);
+}
 
 + (void)shutdown {
   for (PCBrowser *b : std::set<PCBrowser *>(g_browsers)) [b close];
