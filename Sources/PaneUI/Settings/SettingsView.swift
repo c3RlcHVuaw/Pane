@@ -676,6 +676,11 @@ struct AdvancedPane: View {
                 BadgeToggle(symbol: "shield.lefthalf.filled", color: .orange, title: "Block ads and trackers", isOn: $settings.blockAds)
             }
             Section {
+                TextField("Sites blocked in focus mode", text: $settings.focusSites, axis: .vertical).lineLimit(1...3)
+            } header: { Text("Focus mode") } footer: {
+                Text("Separate the sites with commas. Start a session from the View menu (⌃⌘F).")
+            }
+            Section {
                 Button { actions.showHistory() } label: {
                     HStack { Label("Browsing history", systemImage: "clock.arrow.circlepath"); Spacer(); Text("⌘Y").foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
                         .contentShape(Rectangle())

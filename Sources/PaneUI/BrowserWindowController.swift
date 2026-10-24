@@ -409,6 +409,25 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         return log + "survived"
     }
 
+    /// Debug aid: do groups survive a workspace round trip, the sidebar and a save to disk?
+    public func debugGroups() async -> String {
+        var out = ""
+        let g = store.createGroup(name: "Keep", colorIndex: 2)
+        let a = store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true), b = store.addTab(url: "http://127.0.0.1:8765/ads.html", activate: false)
+        store.move(a, toGroup: g); store.move(b, toGroup: g)
+        showActive(); try? await Task.sleep(nanoseconds: 800_000_000)
+        out += "before: groups=\(store.groups.count) rows=\(sidebar.debugConsistency())\n"
+        if let w = workspaces.add(name: "Other") {
+            switchWorkspace(w.id); try? await Task.sleep(nanoseconds: 800_000_000)
+            out += "other: groups=\(store.groups.count) rows=\(sidebar.debugConsistency())\n"
+            switchWorkspace(WorkspaceStore.mainID); try? await Task.sleep(nanoseconds: 800_000_000)
+        }
+        out += "back: groups=\(store.groups.map(\.name)) rows=\(sidebar.debugConsistency())\n"
+        saveNow(); try? await Task.sleep(nanoseconds: 300_000_000)
+        if let u = sessionURL, let d = try? Data(contentsOf: u), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] { out += "disk groups=\((o["groups"] as? [Any])?.count ?? -1)\n" }
+        return out
+    }
+
     /// Debug aid: hammers the sidebar with random moves, groups, pins, sleeps and closes at different speeds.
     public func debugSidebarStress(steps: Int) async -> String {
         var rng = SystemRandomNumberGenerator()
@@ -769,7 +788,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// Workspaces of this profile (private windows have none).
     private lazy var workspaces = WorkspaceStore(directory: storage?.directory)
-    private var sessionURL: URL? { storage == nil ? nil : workspaces.sessionURL(for: workspaces.activeID) }
+    /// Only one window per profile owns the saved tabs; a second window would overwrite them (and lose the groups).
+    public var ownsSession = true
+    public var storageDirectory: URL? { storage?.directory }
+    private var sessionURL: URL? { storage == nil || !ownsSession ? nil : workspaces.sessionURL(for: workspaces.activeID) }
 
     // MARK: Workspaces
 
@@ -1622,6 +1644,118 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         ToastView.show(in: webHost, message: "📝 " + String(n.text.prefix(120)), symbol: "note.text", actionTitle: "Edit", duration: 8) { [weak self] in self?.addNote(nil) }
     }
 
+
+    // MARK: Focus mode
+
+    private var focusEnd: Date?
+    private var focusTimer: Timer?
+    private var focusPill: FocusPill?
+    private var focusAllowed: Set<String> = []
+    private var focusOverlays: [UUID: FocusBlockOverlay] = [:]
+    private var sidebarWasCollapsed = false
+    var isFocusing: Bool { focusEnd != nil }
+
+    @objc public func toggleFocusMode(_ sender: Any?) {
+        if isFocusing { endFocus(finished: false); return }
+        let alert = NSAlert()
+        alert.messageText = tr("Start a focus session")
+        alert.informativeText = tr("The sidebar hides and distracting sites are blocked until the timer ends. You can change the list in Settings → Advanced.")
+        let pop = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 200, height: 26))
+        for m in [15, 25, 45, 60, 90] { pop.addItem(withTitle: String(localized: "\(m) minutes")); pop.lastItem?.tag = m }
+        pop.selectItem(withTag: 25)
+        alert.accessoryView = pop
+        alert.addButton(withTitle: tr("Start")); alert.addButton(withTitle: tr("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        startFocus(minutes: pop.selectedItem?.tag ?? 25)
+    }
+
+    func startFocus(minutes: Int) {
+        focusEnd = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        focusAllowed = []
+        sidebarWasCollapsed = sidebarCollapsed
+        if !sidebarCollapsed { toggleSidebar() }
+        let pill = FocusPill()
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        pill.onClick = { [weak self] in self?.endFocus(finished: false) }
+        webHost.addSubview(pill)
+        NSLayoutConstraint.activate([pill.trailingAnchor.constraint(equalTo: webHost.trailingAnchor, constant: -14), pill.topAnchor.constraint(equalTo: webHost.topAnchor, constant: 10)])
+        focusPill = pill
+        pill.set(remaining: TimeInterval(minutes * 60))
+        focusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let end = self.focusEnd else { return }
+                let left = end.timeIntervalSinceNow
+                if left <= 0 { self.endFocus(finished: true) } else { self.focusPill?.set(remaining: left) }
+            }
+        }
+        if let id = store.activeTabID { applyFocusBlock(id) }
+        ToastView.show(in: webHost, message: String(localized: "Focus for \(minutes) minutes"), symbol: "moon.stars.fill", duration: 2)
+    }
+
+    func endFocus(finished: Bool) {
+        focusEnd = nil; focusTimer?.invalidate(); focusTimer = nil
+        focusPill?.removeFromSuperview(); focusPill = nil
+        focusOverlays.values.forEach { $0.removeFromSuperview() }; focusOverlays = [:]
+        if sidebarCollapsed != sidebarWasCollapsed { toggleSidebar() }
+        if finished { NSSound(named: "Glass")?.play() }
+        ToastView.show(in: webHost, message: finished ? "Focus session finished" : "Focus session ended", symbol: "checkmark.circle.fill", duration: 3)
+    }
+
+    /// Covers the page with a "blocked" card when the tab is on a listed site during a focus session.
+    private func applyFocusBlock(_ id: UUID) {
+        guard isFocusing, let l = live[id], let t = store.tab(id), let host = URL(string: t.url)?.host else { focusOverlays.removeValue(forKey: id)?.removeFromSuperview(); return }
+        let blocked = FocusSites.isBlocked(host: host, in: FocusSites.list(settings.focusSites)) && !focusAllowed.contains(host)
+        if !blocked { focusOverlays.removeValue(forKey: id)?.removeFromSuperview(); return }
+        guard focusOverlays[id] == nil else { return }
+        l.tab.stop()
+        let o = FocusBlockOverlay(host: host,
+            onBack: { [weak self] in self?.focusOverlays.removeValue(forKey: id)?.removeFromSuperview(); if self?.navState[id]?.canGoBack == true { l.tab.goBack() } else { self?.close(id) } },
+            onOpen: { [weak self] in self?.focusAllowed.insert(host); self?.focusOverlays.removeValue(forKey: id)?.removeFromSuperview(); l.tab.reload() })
+        o.translatesAutoresizingMaskIntoConstraints = false
+        l.container.addSubview(o)
+        NSLayoutConstraint.activate([
+            o.leadingAnchor.constraint(equalTo: l.container.leadingAnchor), o.trailingAnchor.constraint(equalTo: l.container.trailingAnchor),
+            o.topAnchor.constraint(equalTo: l.container.topAnchor), o.bottomAnchor.constraint(equalTo: l.container.bottomAnchor),
+        ])
+        focusOverlays[id] = o
+    }
+
+    // MARK: Screenshot
+
+    private func devToolsRaw(_ method: String, _ params: String?) async -> String? {
+        try? await activeLive?.tab.devTools(method, params: params)
+    }
+
+    private static func parseObject(_ raw: String?) -> [String: Any]? {
+        guard let d = raw?.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    }
+
+    /// Saves the whole page (not just what is visible) as a PNG in Downloads and puts it on the clipboard.
+    @objc public func screenshotPage(_ sender: Any?) {
+        guard activeLive != nil, let url = store.activeTabID.flatMap({ store.tab($0)?.url }), url.hasPrefix("http") || url.hasPrefix("file") else { NSSound.beep(); return }
+        Task { @MainActor in
+            var clip: [String: Any]?
+            if let m = Self.parseObject(await devToolsRaw("Page.getLayoutMetrics", nil)),
+               let size = (m["cssContentSize"] ?? (m["result"] as? [String: Any])?["cssContentSize"]) as? [String: Any],
+               let w = size["width"] as? Double, let h = size["height"] as? Double {
+                clip = ["x": 0, "y": 0, "width": w, "height": min(h, 16000), "scale": 1]
+            }
+            var params: [String: Any] = ["format": "png", "fromSurface": true, "captureBeyondViewport": true]
+            if let clip { params["clip"] = clip }
+            let reply = Self.parseObject(await devToolsRaw("Page.captureScreenshot", Self.json(params)))
+            guard let b64 = (reply?["data"] ?? (reply?["result"] as? [String: Any])?["data"]) as? String, let png = Data(base64Encoded: b64), let img = NSImage(data: png) else {
+                ToastView.show(in: webHost, message: "Could not take the screenshot", symbol: "exclamationmark.triangle", duration: 3); return
+            }
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH.mm.ss"
+            let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+            let file = dir.appendingPathComponent("Pane Screenshot \(f.string(from: Date())).png")
+            try? png.write(to: file)
+            NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([img])
+            ToastView.show(in: webHost, message: "Screenshot saved and copied", symbol: "camera.viewfinder", actionTitle: "Show", duration: 5) { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+        }
+    }
+
     // MARK: Remembering pages
 
     /// The text of every open page, kept in memory only, so one search finds a word on any open tab.
@@ -2352,7 +2486,8 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     func showActive() {
         guard let id = store.activeTabID else { return }
         let isStart = store.tab(id)?.url.isEmpty ?? false
-        if !isStart { ensureLive(id) }  // a start-page tab needs no web view at all
+        if !isStart { ensureLive(id) }
+        applyFocusBlock(id)  // a start-page tab needs no web view at all
         statusBubble.set("")
         if findBar != nil { live.values.forEach { $0.tab.stopFinding() }; findBar?.dismiss(); findBar = nil }
         // Split view: the active page on the left, a second page on the right.
@@ -2889,6 +3024,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     }
 
     public func tab(_ tab: BrowserTab, didChangeURL url: String) {
+        if let fid = tabIDs[ObjectIdentifier(tab as AnyObject)] { DispatchQueue.main.async { MainActor.assumeIsolated { [weak self] in self?.applyFocusBlock(fid) } } }
         guard let id = tabIDs[ObjectIdentifier(tab as AnyObject)] else { return }
         store.update(id, url: url)
         if id == store.activeTabID {
@@ -3044,6 +3180,15 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             let short = selection.count > 24 ? String(selection.prefix(24)) + "…" : selection
             let engineName = settings.searchEngine.name
             add(tr("Copy"), "doc.on.doc") { tab.performEdit(.copy) }
+            if notes.isPersistent, page.hasPrefix("http") {
+                add(tr("Save Quote to Notes"), "quote.opening") { [weak self] in
+                    guard let self else { return }
+                    let old = self.notes.note(forURL: page)?.text ?? ""
+                    let quote = "> " + selection.replacingOccurrences(of: "\n", with: "\n> ")
+                    self.notes.set(url: page, title: self.store.tab(id)?.displayTitle ?? page, text: old.isEmpty ? quote : old + "\n\n" + quote)
+                    ToastView.show(in: self.webHost, message: "Quote saved to the page's note", symbol: "quote.opening", duration: 2)
+                }
+            }
             add(String(localized: "Search \(engineName) for “\(short)”"), "magnifyingglass") { [weak self] in
                 guard let self, let url = AddressInput.resolve(selection, engine: self.settings.searchEngine) else { return }
                 self.open(url, newTab: true)
@@ -3097,6 +3242,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             let marked = bookmarks.isBookmarked(page)
             add(tr(marked ? "Remove Bookmark" : "Bookmark This Page"), marked ? "star.slash" : "star") { [weak self] in self?.bookmarkThisPage(nil) }
             add(tr("Copy Page Address"), "link") { copyText(page) }
+            add(tr("Screenshot Whole Page"), "camera.viewfinder") { [weak self] in self?.screenshotPage(nil) }
             add(tr("Note for This Page…"), "note.text") { [weak self] in self?.addNote(nil) }
             sep()
             add(tr("Translate Page"), "character.bubble", enabled: assistantSession.isConfigured) { [weak self] in self?.translatePage(nil) }

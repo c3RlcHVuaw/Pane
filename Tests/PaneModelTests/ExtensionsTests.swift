@@ -40,3 +40,13 @@ final class QuickAnswerTests: XCTestCase {
         XCTAssertEqual(QuickAnswers.convert(100, from: "USD", to: "EUR", rates: ["USD": 1, "EUR": 0.9]) ?? 0, 90, accuracy: 0.0001)
     }
 }
+
+final class FocusSitesTests: XCTestCase {
+    func testBlocking() {
+        let l = FocusSites.list(FocusSites.defaults)
+        XCTAssertTrue(FocusSites.isBlocked(host: "www.youtube.com", in: l))
+        XCTAssertTrue(FocusSites.isBlocked(host: "m.youtube.com", in: l))
+        XCTAssertFalse(FocusSites.isBlocked(host: "notyoutube.com", in: l))
+        XCTAssertFalse(FocusSites.isBlocked(host: "example.com", in: l))
+    }
+}

@@ -266,3 +266,74 @@ final class HoverBox: NSView {
     override func mouseEntered(with event: NSEvent) { onEnter?() }
     override func mouseExited(with event: NSEvent) { onExit?() }
 }
+
+
+/// Shown instead of a distracting site while a focus session runs.
+final class FocusBlockOverlay: NSView {
+    private final class Handler: NSObject {
+        let action: () -> Void
+        init(_ a: @escaping () -> Void) { action = a }
+        @MainActor @objc func fire() { action() }
+    }
+
+    init(host: String, onBack: @escaping () -> Void, onOpen: @escaping () -> Void) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = NSColor.textBackgroundColor.cgColor }
+        let icon = NSImageView(image: NSImage(systemSymbolName: "moon.stars.fill", accessibilityDescription: nil) ?? NSImage())
+        icon.contentTintColor = .systemIndigo
+        icon.symbolConfiguration = .init(pointSize: 44, weight: .regular)
+        let title = NSTextField(labelWithString: tr("Focus mode is on"))
+        title.font = .systemFont(ofSize: 22, weight: .semibold)
+        let detail = NSTextField(wrappingLabelWithString: String(localized: "\(host) is blocked until your focus session ends."))
+        detail.alignment = .center; detail.textColor = .secondaryLabelColor
+        let back = PillButton(title: tr("Go Back"), symbol: "chevron.left", target: nil, action: nil)
+        let open = PillButton(title: tr("Open Anyway"), symbol: "arrow.up.right", target: nil, action: nil)
+        for (b, a) in [(back, onBack), (open, onOpen)] {
+            let h = Handler(a); b.target = h; b.action = #selector(Handler.fire)
+            objc_setAssociatedObject(b, "handler", h, .OBJC_ASSOCIATION_RETAIN)
+            b.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        }
+        let buttons = NSStackView(views: [back, open]); buttons.spacing = 10
+        let stack = NSStackView(views: [icon, title, detail, buttons])
+        stack.orientation = .vertical; stack.spacing = 12; stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor), stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -20),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 380),
+        ])
+        setAccessibilityRole(.group); setAccessibilityLabel(tr("Focus mode is on"))
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Small countdown in the corner of the page while a focus session runs. Click it to end the session.
+final class FocusPill: NSView {
+    private let label = NSTextField(labelWithString: "")
+    var onClick: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 13; layer?.cornerCurve = .continuous
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = NSColor.systemIndigo.withAlphaComponent(0.9).cgColor }
+        let icon = NSImageView(image: NSImage(systemSymbolName: "moon.stars.fill", accessibilityDescription: nil) ?? NSImage())
+        icon.contentTintColor = .white
+        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold); label.textColor = .white
+        let row = NSStackView(views: [icon, label]); row.spacing = 5
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -11),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 5), row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+        ])
+        toolTip = tr("End focus session")
+        setAccessibilityRole(.button); setAccessibilityLabel(tr("End focus session"))
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    func set(remaining: TimeInterval) {
+        let s = max(0, Int(remaining)); label.stringValue = String(format: "%d:%02d", s / 60, s % 60)
+    }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}

@@ -145,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     if env["PANE_DEBUG_PW"] != nil { Task { @MainActor in try? (await win?.debugPasswords() ?? "").write(toFile: prefix + "-pw.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_STRESS_ALL"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugStressEverything(rounds: n) ?? "").write(toFile: prefix + "-stress.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_SIDEBAR"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugSidebarStress(steps: n) ?? "").write(toFile: prefix + "-sidebar.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_GROUPS"] != nil { Task { @MainActor in try? (await win?.debugGroups() ?? "").write(toFile: prefix + "-groups.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_AUTOFILL"] != nil { Task { @MainActor in try? (await win?.debugAutofill() ?? "").write(toFile: prefix + "-autofill.txt", atomically: true, encoding: .utf8) } }
                     if let l = env["PANE_DEBUG_LONG"] { win?.debugLongStrings(Set(l.split(separator: ",").map(String.init))) }
                     if env["PANE_DEBUG_FEATURES"] != nil { Task { @MainActor in try? (await win?.debugFeatures() ?? "").write(toFile: prefix + "-features.txt", atomically: true, encoding: .utf8) } }
@@ -282,10 +283,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                                     baseURL: settings.assistantBaseURL, apiKey: assistantKey.value)
             },
             sleepOverride: sleepOverride)
+        // The first window of a profile keeps the saved tabs; later windows start empty and save nothing.
+        if let dir = storage?.directory, controllers.contains(where: { $0.ownsSession && $0.storageDirectory == dir }) { c.ownsSession = false }
         if !isMain { c.settingsRouter = { [weak self] in self?.settingsOwner()?.showSettings(nil) } }
         c.onClosed = { [weak self, weak c] in
             guard let self else { return }
+            let owned = c?.ownsSession == true, dir = c?.storageDirectory
             self.controllers.removeAll { $0 === c }
+            // The window that kept the saved tabs closed: the next one for the same profile takes over.
+            if owned, let dir, let next = self.controllers.first(where: { $0.storageDirectory == dir }) { next.ownsSession = true; next.saveNow() }
             // Settings lives in one window; if its owner closed, the next window takes over.
             if !self.controllers.contains(where: { $0.settingsRouter == nil }) { self.controllers.first?.settingsRouter = nil }
         }
@@ -360,6 +366,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc func newTab(_ s: Any?) { active?.newTab(s) }
     @objc func closeTab(_ s: Any?) { active?.closeCurrentTab(s) }
     @objc func newGroup(_ s: Any?) { active?.newGroup(s) }
+    @objc func toggleFocusMode(_ s: Any?) { active?.toggleFocusMode(s) }
+    @objc func screenshotPage(_ s: Any?) { active?.screenshotPage(s) }
     @objc func togglePin(_ s: Any?) { active?.togglePinCurrentTab(s) }
     @objc func sleepTab(_ s: Any?) { active?.sleepCurrentTab(s) }
     @objc func nextTab(_ s: Any?) { active?.selectNextTab(s) }
@@ -481,6 +489,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             item("Developer Tools", #selector(showDevTools(_:)), "i", target: self, mods: [.command, .option]),
             item("View Source", #selector(viewSource(_:)), "u", target: self, mods: [.command, .option]),
             item("Reader Mode", #selector(toggleReader(_:)), "r", target: self, mods: [.command, .option]),
+            item("Focus Mode", #selector(toggleFocusMode(_:)), "f", target: self, mods: [.command, .control]),
+            item("Screenshot Whole Page", #selector(screenshotPage(_:)), "", target: self),
             item("Summarize Page", #selector(summarizePage(_:)), "s", target: self, mods: [.command, .option]),
             item("Back", #selector(goBack(_:)), "[", target: self),
             item("Forward", #selector(goForward(_:)), "]", target: self),
