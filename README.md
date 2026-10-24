@@ -1,52 +1,101 @@
+<div align="center">
+
+<img src="Resources/icon-1024.png" width="112" alt="Pane">
+
 # Pane
 
-A native macOS browser built on Chromium (CEF) with a Liquid Glass interface, vertical tabs and workspaces, a built-in AI assistant/agent, and sync.
+**A native macOS browser on Chromium — with Liquid Glass, vertical tabs and an AI agent that can browse for you.**
 
-> Нативный браузер для macOS на Chromium: стеклянный интерфейс, вертикальные вкладки, рабочие пространства, ИИ-ассистент и агент, синхронизация. Интерфейс на русском и английском.
+[![Download](https://img.shields.io/badge/Download-Pane.dmg-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://pane.2-26-86-13.sslip.io/Pane.dmg)
+&nbsp;
+![macOS](https://img.shields.io/badge/macOS-26%2B-black?style=for-the-badge&logo=apple)
+![Swift](https://img.shields.io/badge/Swift-6-F05138?style=for-the-badge&logo=swift&logoColor=white)
+![Chromium](https://img.shields.io/badge/Chromium-CEF-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)
 
-## Features
+*Нативный браузер для macOS на Chromium: стеклянный интерфейс, вертикальные вкладки, ИИ-агент. Интерфейс на русском и английском.*
 
-- **Interface:** Liquid Glass, vertical tabs, groups, pinned tabs, workspaces, split view, tab sleeping, colour themes, site-colour sidebar tint
-- **Search:** ⌘K palette over tabs, bookmarks and history (keywords and meaning; Russian word forms)
-- **Assistant & agent:** ask about pages, or let the agent browse for you (open/close tabs, fill forms, organise bookmarks, watch pages, research, job applications). Bring your own key (Anthropic, OpenAI or compatible); the key lives in the macOS Keychain. The agent never types passwords or card numbers and confirms risky steps.
-- **Reading:** reader mode, page summary, page translation, native PDF viewer, picture in picture
-- **Privacy:** ad and tracker blocking, private windows, profiles, saved logins in the Keychain (optionally synced end-to-end encrypted)
-- **Library:** bookmarks (import from Chrome, Safari, Arc), history and downloads window
-- **Accounts & sync:** bookmarks, preferences and encrypted logins across Macs (own server in `server/`)
-- **Updates:** in-app updater with release notes; crash reports are sent only if you agree
+<img src="docs/images/hero.png" width="860" alt="Pane with the assistant open">
 
-## Layout
+</div>
+
+## Download
+
+**[⬇ Download Pane.dmg](https://pane.2-26-86-13.sslip.io/Pane.dmg)** (Apple-silicon Macs, macOS 26 or newer). Open the disk image and drag Pane to *Applications*. Pane updates itself: when a new version is out, an **Update** button appears in the sidebar and a "What's new" card shows after installing.
+
+> The app isn't notarized by Apple yet, so the first time: right-click **Pane → Open → Open** (or *System Settings → Privacy & Security → Open Anyway*).
+
+## What's inside
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/palette.png" alt="Command palette"></td>
+<td width="50%"><img src="docs/images/dark.png" alt="Dark mode"></td>
+</tr>
+<tr>
+<td><b>⌘K palette</b> — search tabs, bookmarks and history by keywords and by meaning, with Russian word forms.</td>
+<td><b>Glass everywhere</b> — light, dark and colour themes; the sidebar takes the colour of the site you are on.</td>
+</tr>
+</table>
+
+### Tabs & workspaces
+Vertical sidebar, tab groups, pinned tabs, **workspaces** you can switch in one key (⌥⌘[ / ⌥⌘]), **split view** (⌥⌘\), tabs that fall asleep to save memory, profiles and private windows.
+
+### An agent that actually browses
+Switch the panel to **Act** and say what you want. The agent opens and closes tabs, searches, fills forms, organises bookmarks into folders, watches pages ("tell me when the price drops below 50 000"), compares sites and writes applications from your "About me" notes. You see every step with animations, it asks before anything risky (or turn on **auto-approve**), and it **never types passwords, card numbers or one-time codes**. Page text can't give it orders.
+Bring your own key — Anthropic (Claude), OpenAI or any compatible server; it stays in the macOS Keychain.
+
+### Reading tools
+Reader mode (⌥⌘R) · page summary (⌥⌘S) · **page translation** (⌥⌘T) · native **PDF viewer** with search · picture in picture (⌥⌘P) · history and downloads window (⌘Y) · dictation in the assistant.
+
+### Privacy
+Ad and tracker blocking · private windows · saved logins in the Keychain, optionally synced **end-to-end encrypted** with your own passphrase · anonymous crash reports only if you agree.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/themes.png" alt="Colour themes"></td>
+<td width="50%"><img src="docs/images/card.png" alt="Member card"></td>
+</tr>
+<tr>
+<td><b>Colour themes</b> — Ocean, Sunset, Forest, Rose, Violet, Graphite.</td>
+<td><b>Member card</b> — a collectible card with your number among Pane users; it tilts and shimmers when you hover it.</td>
+</tr>
+</table>
+
+## For developers
+
+### Layout
 
 | Module | Purpose |
 |---|---|
 | `CEFBridge` | Objective-C++ bridge to Chromium Embedded Framework |
-| `PaneEngine` | Engine-agnostic protocols (UI never touches CEF directly) |
+| `PaneEngine` | Engine-agnostic protocols — the UI never touches CEF directly |
 | `PaneCEF` | CEF implementation of those protocols |
-| `PaneModel` | Pure models: tabs, bookmarks, settings, workspaces, agent loop… |
+| `PaneModel` | Pure models: tabs, workspaces, bookmarks, settings, the agent loop… |
 | `PaneUI` | AppKit + SwiftUI interface |
 | `PaneAssistant` | LLM providers (Anthropic, OpenAI-compatible) |
-| `PaneSync`, `PaneUpdate`, `PaneSearch`, `PaneImport` | Sync client, updater, search, importers |
+| `PaneSync` · `PaneUpdate` · `PaneSearch` · `PaneImport` | Sync client, updater, search, bookmark importers |
 | `Pane` | App entry point and menus |
-| `server/` | Node.js sync / crash-report server |
+| `server/` | Node.js sync and crash-report server |
 
-Layers (engine / UI / assistant) don't depend on each other directly.
+The engine, UI and assistant layers don't depend on each other directly.
 
-## Build
+### Build
 
-Requires macOS 26+ and Xcode with Swift 6.
+Needs macOS 26+, Xcode with Swift 6 and Python 3.
 
 ```bash
-scripts/fetch_cef.sh     # downloads the pinned CEF build into third_party/ (~480 MB)
-scripts/build.sh         # builds build/Pane.app (signs with an Apple Development identity if you have one, otherwise ad-hoc)
-swift test               # unit tests
+scripts/fetch_cef.sh   # downloads the pinned CEF build into third_party/ (~480 MB)
+scripts/build.sh       # builds build/Pane.app (signed with an Apple Development identity if present, else ad-hoc)
+swift test             # unit tests
 ```
 
-Strings: Russian translations live in `scripts/strings_ru.py` (+ `strings_ru_extra.py`); `scripts/strings_ru.py check` lists untranslated keys.
+Russian strings live in `scripts/strings_ru.py` (+ `strings_ru_extra.py`); `scripts/strings_ru.py check` lists missing translations.
 
-## Release & server (maintainers)
+### Releases (maintainers)
+`scripts/release.sh "notes"` builds, zips, writes the update feed and uploads it — `scripts/publish.sh` targets the author's server; change the host there. The sync server runs with `docker compose up -d` in `server/`.
 
-`scripts/release.sh "notes"` builds, zips, writes the update feed and uploads it (see `scripts/publish.sh` — it targets the author's own server; change the host and key there). The sync server in `server/` runs with `docker compose up -d`.
+Test runs never touch your real data: set `PANE_SUPPORT_DIR` (and `PANE_OFFSCREEN`) and the app uses its own folder, its own preferences and no sync. Many `PANE_DEBUG_*` switches (snapshots, stress runs, feature probes) are listed in `Sources/Pane/main.swift`.
 
-## Test aids
+---
 
-The app has many `PANE_DEBUG_*` environment switches (offscreen snapshots, stress runs, feature probes) used by the author's test runs; see `Sources/Pane/main.swift`.
+<div align="center">Made with care in Swift · Chromium via <a href="https://bitbucket.org/chromiumembedded/cef">CEF</a></div>
