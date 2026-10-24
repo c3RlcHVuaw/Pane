@@ -307,4 +307,9 @@ EXTRA = {
 "automatic updates": "автообновление",
 "Collapse All Groups": "Свернуть все группы", "Expand All Groups": "Развернуть все группы",
 "Put Other Tabs to Sleep": "Усыпить остальные вкладки", "Close Duplicate Tabs": "Закрыть дубликаты вкладок",
+"Icon": "Иконка", "CURRENT ICON": "ТЕКУЩАЯ ИКОНКА", "The Original": "Оригинал", "Sunset": "Закат", "Ocean": "Океан", "Mint": "Мята",
+"Candy": "Леденец", "Graphite": "Графит", "Neon": "Неон", "The icon changes in the Dock while Pane is running.": "Иконка в Dock меняется, пока Pane запущен.",
+"Haptic feedback when reordering tabs": "Тактильный отклик при перемещении вкладок", "Restore windows from the previous session": "Восстанавливать окна прошлого сеанса",
+"Remember page text for search": "Запоминать текст страниц для поиска", "Stays on this Mac.": "Остаётся на этом Mac.",
+"Tint the sidebar with the page colour": "Окрашивать боковую панель в цвет страницы", "Block ads and trackers": "Блокировать рекламу и трекеры",
 }

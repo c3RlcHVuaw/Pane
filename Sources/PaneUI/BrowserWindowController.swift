@@ -248,6 +248,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         window?.layoutIfNeeded()
         alignTrafficLights()
         DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.alignTrafficLights() } }
+        sidebar.hapticsEnabled = { [weak self] in self?.settings.hapticFeedback ?? true }
         sidebar.reload()
         bookmarksBar.reload()
         bookmarksSidebar.reload()

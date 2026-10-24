@@ -42,7 +42,7 @@ final class PaneRowView: NSTableRowView {
 final class TabCellView: NSTableCellView {
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
-    private let close = NSButton()
+    private let close = HoverCloseButton()
     private let spinner = NSProgressIndicator()
     private let speaker = NSButton()
     private var titleToEdge: NSLayoutConstraint!
@@ -70,7 +70,8 @@ final class TabCellView: NSTableCellView {
         title.font = .systemFont(ofSize: 13)
         close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Tab")
         close.isBordered = false
-        close.imageScaling = .scaleProportionallyDown
+        close.imageScaling = .scaleNone
+        close.symbolConfiguration = .init(pointSize: 9, weight: .bold)
         close.contentTintColor = .secondaryLabelColor
         close.target = self
         close.action = #selector(didClose)
@@ -100,9 +101,9 @@ final class TabCellView: NSTableCellView {
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
             speaker.centerYAnchor.constraint(equalTo: centerYAnchor),
             speaker.widthAnchor.constraint(equalToConstant: 14), speaker.heightAnchor.constraint(equalToConstant: 14),
-            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             close.centerYAnchor.constraint(equalTo: centerYAnchor),
-            close.widthAnchor.constraint(equalToConstant: 16), close.heightAnchor.constraint(equalToConstant: 16),
+            close.widthAnchor.constraint(equalToConstant: 22), close.heightAnchor.constraint(equalToConstant: 22),
         ])
         // The title uses all the room it can; the close button / speaker only take space when they are showing.
         speakerAtEdge = speaker.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9)
@@ -249,4 +250,29 @@ final class SelectionPill: NSView {
         NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; animator().alphaValue = 0 }
         placed = false
     }
+}
+
+
+/// The tab's close button: a small rounded plate appears behind the × while the pointer is over it.
+final class HoverCloseButton: NSButton {
+    private var hovering = false { didSet { refresh() } }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    private func refresh() {
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = hovering ? Style.fill(0.14).cgColor : NSColor.clear.cgColor }
+        contentTintColor = hovering ? .labelColor : .secondaryLabelColor
+    }
+    override func viewDidChangeEffectiveAppearance() { refresh() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
 }

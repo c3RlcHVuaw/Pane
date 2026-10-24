@@ -29,7 +29,7 @@ struct SettingsActions {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, search, appearance, assistant, profiles, account, shortcuts, privacy, updates, advanced
+    case general, search, appearance, assistant, profiles, account, shortcuts, privacy, updates, icon, advanced
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -42,6 +42,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: "Shortcuts"
         case .privacy: "Privacy"
         case .updates: "Updates"
+        case .icon: "Icon"
         case .advanced: "Advanced"
         }
     }
@@ -56,6 +57,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: "keyboard.fill"
         case .privacy: "hand.raised.fill"
         case .updates: "arrow.down.circle.fill"
+        case .icon: "app.fill"
         case .advanced: "wrench.and.screwdriver.fill"
         }
     }
@@ -70,6 +72,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: .orange
         case .privacy: .red
         case .updates: .green
+        case .icon: .orange
         case .advanced: .gray
         }
     }
@@ -128,7 +131,8 @@ struct SettingsRoot: View {
                 case .shortcuts: ShortcutsPane()
                 case .privacy: PrivacyPane(settings: settings, actions: actions, vault: actions.vault)
                 case .updates: UpdatesPane(settings: settings, updates: updates, actions: actions)
-                case .advanced: AdvancedPane(actions: actions)
+                case .icon: IconPane(settings: settings)
+                case .advanced: AdvancedPane(settings: settings, actions: actions)
                 }
             }
             .navigationTitle(Text(LocalizedStringKey(selection.title)))
@@ -633,6 +637,7 @@ private struct ThemeSwatch: View {
 
 /// Chromium's own diagnostic pages, and a shortcut to the full history.
 struct AdvancedPane: View {
+    @ObservedObject var settings: AppSettings
     let actions: SettingsActions
 
     private let pages: [(symbol: String, title: LocalizedStringKey, detail: LocalizedStringKey, url: String)] = [
@@ -651,6 +656,17 @@ struct AdvancedPane: View {
 
     var body: some View {
         Form {
+            Section {
+                BadgeToggle(symbol: "hand.tap.fill", color: .blue, title: "Haptic feedback when reordering tabs", isOn: $settings.hapticFeedback)
+                BadgeToggle(symbol: "arrow.left.arrow.right", color: .green, title: "Swipe between pages with the trackpad", isOn: $settings.swipeNavigation)
+            }
+            Section {
+                BadgeToggle(symbol: "macwindow.on.rectangle", color: .green, title: "Restore windows from the previous session",
+                            isOn: Binding(get: { settings.startup == .restore }, set: { settings.startup = $0 ? .restore : .newTab }))
+                BadgeToggle(symbol: "text.magnifyingglass", color: .red, title: "Remember page text for search", subtitle: "Stays on this Mac.", isOn: $settings.rememberPageText)
+                BadgeToggle(symbol: "paintpalette.fill", color: .purple, title: "Tint the sidebar with the page colour", isOn: $settings.sidebarTint)
+                BadgeToggle(symbol: "shield.lefthalf.filled", color: .orange, title: "Block ads and trackers", isOn: $settings.blockAds)
+            }
             Section {
                 Button { actions.showHistory() } label: {
                     HStack { Label("Browsing history", systemImage: "clock.arrow.circlepath"); Spacer(); Text("⌘Y").foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
@@ -682,5 +698,31 @@ struct AdvancedPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+
+/// A switch row with a coloured icon badge, like the System Settings look.
+struct BadgeToggle: View {
+    let symbol: String
+    let color: Color
+    let title: LocalizedStringKey
+    var subtitle: LocalizedStringKey? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(color.gradient))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                    if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+        }
+        .toggleStyle(.switch)
     }
 }

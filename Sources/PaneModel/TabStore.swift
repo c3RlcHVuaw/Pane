@@ -16,7 +16,8 @@ public struct TabItem: Codable, Identifiable, Equatable, Sendable {
     }
 
     public var displayTitle: String {
-        if !title.isEmpty { return title }
+        if !title.isEmpty && title != "about:blank" { return title }
+        if url == "about:blank" || url.hasPrefix("about:blank#") { return tr("New Tab") }
         return URL(string: url)?.host ?? (url.isEmpty ? tr("New Tab") : url)
     }
 }

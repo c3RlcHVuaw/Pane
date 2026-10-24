@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
+        AppIconStyle.apply(settings.appIcon)
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         // Test mode (PANE_SUPPORT_DIR / PANE_OFFSCREEN): a separate profile and a window parked off-screen,
         // so a test instance never touches the real session or steals focus.

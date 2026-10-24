@@ -72,6 +72,8 @@ public final class AppSettings: ObservableObject {
     @Published public var webSuggestions: Bool { didSet { save("webSuggestions", webSuggestions) } }
     /// Two-finger swipe goes back and forward.
     @Published public var swipeNavigation: Bool { didSet { save("swipeNavigation", swipeNavigation) } }
+    @Published public var appIcon: String { didSet { save("appIcon", appIcon) } }
+    @Published public var hapticFeedback: Bool { didSet { save("hapticFeedback", hapticFeedback) } }
     @Published public var theme: ThemeChoice { didSet { save("theme", theme.rawValue) } }
     @Published public var offerToSavePasswords: Bool { didSet { save("offerToSavePasswords", offerToSavePasswords) } }
     @Published public var sidebarTint: Bool { didSet { save("sidebarTint", sidebarTint) } }
@@ -104,6 +106,8 @@ public final class AppSettings: ObservableObject {
         agentPrivate = defaults.object(forKey: "agentPrivate") as? Bool ?? false
         webSuggestions = defaults.object(forKey: "webSuggestions") as? Bool ?? true
         swipeNavigation = defaults.object(forKey: "swipeNavigation") as? Bool ?? true
+        appIcon = defaults.string(forKey: "appIcon") ?? "original"
+        hapticFeedback = defaults.object(forKey: "hapticFeedback") as? Bool ?? true
         theme = ThemeChoice(rawValue: defaults.string(forKey: "theme") ?? "") ?? .system
         assistantProvider = defaults.string(forKey: "assistantProvider") ?? "anthropic"
         assistantModel = defaults.string(forKey: "assistantModel") ?? "claude-sonnet-5-5"

@@ -31,6 +31,8 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     var isLoading: (UUID) -> Bool = { _ in false }
     var isAudible: (UUID) -> Bool = { _ in false }
     var isMuted: (UUID) -> Bool = { _ in false }
+    var hapticsEnabled: () -> Bool = { true }
+    private var lastDropSlot: String?
 
     private let pinned = PinnedGridView()
     private let outline = ContextOutlineView()
@@ -440,6 +442,8 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             return .copy
         }
         guard draggedID(info) != nil else { return [] }
+        let slot = "\((item as? SidebarNode).map { ObjectIdentifier($0).hashValue } ?? 0)-\(index)"
+        if slot != lastDropSlot { lastDropSlot = slot; if hapticsEnabled() { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) } }
         guard let node = item as? SidebarNode else {
             let n = store.ungrouped.count
             if index == NSOutlineViewDropOnItemIndex || index > n { ov.setDropItem(nil, dropChildIndex: n) }
@@ -465,6 +469,8 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             return true
         }
         guard let id = draggedID(info) else { return false }
+        lastDropSlot = nil
+        if hapticsEnabled() { NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now) }
         guard let node = item as? SidebarNode else {
             let list = store.ungrouped
             store.move(id, toGroup: nil, before: index >= 0 && index < list.count ? list[index].id : nil)
