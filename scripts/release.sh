@@ -13,7 +13,19 @@ echo "$BUILD" > BUILD_NUMBER
 export PANE_APP_OUT="$PWD/build/release/Pane.app"
 ./scripts/build.sh release
 if [ "${SMOKE:-1}" = "1" ]; then ./scripts/smoke_test.sh "$PANE_APP_OUT" || { echo "Smoke test failed — not publishing. (SMOKE=0 to skip)"; exit 1; }; fi
+# The release history (shown in Settings → Updates): one entry per release, kept in docs/releases.json.
+python3 -I - "$VERSION" "$BUILD" "$NOTES" <<'PY'
+import json, sys, datetime
+v, b, n = sys.argv[1:4]
+path = "docs/releases.json"
+try: data = json.load(open(path, encoding="utf-8"))
+except Exception: data = []
+data = [e for e in data if e.get("build") != int(b)]
+data.append({"version": v, "build": int(b), "date": datetime.date.today().isoformat(), "notes": n})
+json.dump(data, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+PY
 mkdir -p dist
+cp docs/releases.json dist/releases.json
 ZIP="Pane-$VERSION-$BUILD.zip"
 rm -f "dist/$ZIP"
 ditto -c -k --keepParent "$PANE_APP_OUT" "dist/$ZIP"

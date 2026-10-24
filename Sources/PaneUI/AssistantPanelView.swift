@@ -32,6 +32,8 @@ final class AssistantPanelModel: ObservableObject {
     var onSend: (String) -> Void = { _ in }
     var onOpenSettings: () -> Void = {}
     var onClose: () -> Void = {}
+    @Published var isFloating = false
+    var onToggleFloating: () -> Void = {}
 
     init(session: AssistantSession, agent: AgentSession) { self.session = session; self.agent = agent }
 
@@ -73,85 +75,69 @@ struct AssistantPanelView: View {
 
     // MARK: Header
 
-    private func modeButton(_ title: LocalizedStringKey, _ mode: AssistantPanelModel.Mode) -> some View {
-        let on = model.mode == mode
-        return Button { withAnimation(.snappy) { model.mode = mode } } label: {
-            Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                .foregroundStyle(on ? Color.white : Color.primary.opacity(0.8))
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .contentShape(Capsule())
-                .paneGlass(Capsule(), tint: on ? model.accent : nil)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(on ? .isSelected : [])
-    }
+    private enum HeaderStyle { case full, noTitle, compact }
 
     private var header: some View {
-        // Wide panels show the title; narrow ones drop it instead of squeezing the controls out of place.
-        ViewThatFits(in: .horizontal) {
-            headerRow(showTitle: true, collapsed: false)
-            headerRow(showTitle: false, collapsed: false)
-            headerRow(showTitle: false, collapsed: true)
+        // The layout depends on the panel's width only (never on the mode), so switching Ask / Act can't make anything jump.
+        GeometryReader { geo in
+            let w = geo.size.width
+            headerRow(w >= 440 ? .full : (w >= 360 ? .noTitle : .compact))
+                .frame(width: geo.size.width, height: geo.size.height)
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(height: 48)
+        .padding(.horizontal, 12)
+        .zIndex(10)
     }
 
-    private func headerRow(showTitle: Bool, collapsed: Bool) -> some View {
-        HStack(spacing: collapsed ? 6 : 8) {
-            if !collapsed {
+    private func headerRow(_ style: HeaderStyle) -> some View {
+        HStack(spacing: 8) {
+            if style != .compact {
                 Image(systemName: "sparkles").font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(LinearGradient(colors: [.purple, .blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
             }
-            if showTitle { Text("Assistant").font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize() }
+            if style == .full { Text("Assistant").font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize() }
             if model.agentEnabled {
-                PaneGlassGroup(spacing: 4) {
-                    HStack(spacing: 4) {
-                        modeButton("Ask", .ask)
-                        modeButton("Act", .act)
-                    }
-                }
-                .fixedSize()
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Assistant mode")
-                .help("Ask: answers questions about pages.  Act: controls the browser for you.")
+                PaneSegmented(selection: $model.mode.animation(.snappy(duration: 0.2)),
+                              options: [.init(value: .ask, title: "Ask", measure: [tr("Ask"), tr("Act")]), .init(value: .act, title: "Act", measure: [])], accent: model.accent)
+                    .paneTooltip("Ask: answers questions about pages.  Act: controls the browser for you.", anchor: .leading)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Assistant mode")
             }
             Spacer(minLength: 4)
-            if isAct && collapsed {
+            if style == .compact {
                 Menu {
-                    Button { model.autoApprove.toggle() } label: { Label("Auto-approve actions", systemImage: model.autoApprove ? "checkmark" : "") }
-                    Button { model.agentPrivate.toggle() } label: { Label("Private mode", systemImage: model.agentPrivate ? "checkmark" : "") }
-                    Button { showHistory = true } label: { Label("Past conversations", systemImage: "clock.arrow.circlepath") }
-                    if !agent.items.isEmpty { Button { withAnimation(.snappy) { agent.clear() } } label: { Label("New chat", systemImage: "square.and.pencil") } }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.primary.opacity(0.75)).frame(width: 28, height: 28)
-                        .paneGlass(Circle())
-                }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .popover(isPresented: $showHistory, arrowEdge: .bottom) {
-                    AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) })
-                }
-            } else if isAct {
-                headerButton(symbol: model.autoApprove ? "checkmark.shield.fill" : "checkmark.shield", tint: model.autoApprove ? .orange : nil,
-                             help: model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.",
-                             label: model.autoApprove ? "Auto-approve on" : "Auto-approve off") { withAnimation(.snappy) { model.autoApprove.toggle() } }
-                    .symbolEffect(.bounce, value: model.autoApprove)
-                headerButton(symbol: model.agentPrivate ? "lock.shield.fill" : "lock.shield", tint: model.agentPrivate ? .purple : nil,
-                             help: model.agentPrivate ? "Private mode is on: the agent works in a private tab and can't see your bookmarks, history or logins. Click to turn off." : "Private mode is off. Turn on to make the agent work in a private tab that can't see your bookmarks, history or logins.",
-                             label: model.agentPrivate ? "Private mode on" : "Private mode off") { model.agentPrivate.toggle() }
-                headerButton(symbol: "clock.arrow.circlepath", tint: showHistory ? .accentColor : nil, help: "Past conversations", label: "Past conversations") { showHistory.toggle() }
-                    .popover(isPresented: $showHistory, arrowEdge: .bottom) {
-                        AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) })
+                    if isAct {
+                        Button { model.autoApprove.toggle() } label: { Label("Auto-approve actions", systemImage: model.autoApprove ? "checkmark" : "") }
+                        Button { model.agentPrivate.toggle() } label: { Label("Private mode", systemImage: model.agentPrivate ? "checkmark" : "") }
+                        Button { showHistory = true } label: { Label("Past conversations", systemImage: "clock.arrow.circlepath") }
                     }
+                    Button { model.onToggleFloating() } label: { Label(model.isFloating ? "Dock to the Window" : "Float in Its Own Window", systemImage: "macwindow.on.rectangle") }
+                    if isAct ? !agent.items.isEmpty : !session.messages.isEmpty { Button { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } } label: { Label("New chat", systemImage: "square.and.pencil") } }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).frame(width: 16, height: 16)
+                }
+                .menuStyle(.button).menuIndicator(.hidden).paneIconButtonStyle()
+                .paneTooltip("More", anchor: .trailing)
+                .popover(isPresented: $showHistory, arrowEdge: .bottom) { AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) }) }
+            } else {
+                if isAct {
+                    GlassIconButton(symbol: model.autoApprove ? "checkmark.shield.fill" : "checkmark.shield", tint: model.autoApprove ? .orange : nil,
+                                    help: model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.") {
+                        withAnimation(.snappy) { model.autoApprove.toggle() }
+                    }
+                    GlassIconButton(symbol: model.agentPrivate ? "lock.shield.fill" : "lock.shield", tint: model.agentPrivate ? .purple : nil,
+                                    help: model.agentPrivate ? "Private mode is on: the agent works in a private tab and can't see your bookmarks, history or logins. Click to turn off." : "Private mode is off. Turn on to make the agent work in a private tab that can't see your bookmarks, history or logins.") { model.agentPrivate.toggle() }
+                    GlassIconButton(symbol: "clock.arrow.circlepath", tint: showHistory ? model.accent : nil, help: "Past conversations") { showHistory.toggle() }
+                        .popover(isPresented: $showHistory, arrowEdge: .bottom) { AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) }) }
+                }
+                if isAct ? !agent.items.isEmpty : !session.messages.isEmpty {
+                    GlassIconButton(symbol: "square.and.pencil", tint: nil, help: "New chat") { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } }
+                }
+                GlassIconButton(symbol: model.isFloating ? "arrow.down.right.and.arrow.up.left" : "macwindow.on.rectangle", tint: nil,
+                                help: model.isFloating ? "Dock to the Window" : "Float in Its Own Window") { model.onToggleFloating() }
             }
-            if !collapsed || !isAct, isAct ? !agent.items.isEmpty : !session.messages.isEmpty {
-                headerButton(symbol: "square.and.pencil", tint: nil, help: "New chat", label: "New chat") { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } }
-            }
-            headerButton(symbol: "xmark", tint: nil, help: "Close  ⇧⌘A", label: "Close assistant") { model.onClose() }
+            GlassIconButton(symbol: "xmark", tint: nil, help: "Close  ⇧⌘A", anchor: .trailing) { model.onClose() }
         }
-    }
-
-    private func headerButton(symbol: String, tint: Color?, help: LocalizedStringKey, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
-        GlassIconButton(symbol: symbol, tint: tint, size: 28, help: help, label: label, action: action)
     }
 
     // MARK: Setup
@@ -248,7 +234,7 @@ struct AssistantPanelView: View {
                 .paneGlass(Circle(), tint: busy ? Color.red : (model.draft.trimmingCharacters(in: .whitespaces).isEmpty ? Color.secondary : model.accent))
         }
         .buttonStyle(.plain)
-        .help(busy ? "Stop  ⌘." : "Send  ↩")
+        .paneTooltip(busy ? "Stop  ⌘." : "Send  ↩", anchor: .trailing)
         .accessibilityLabel(busy ? "Stop" : "Send")
     }
 
@@ -268,7 +254,7 @@ struct AssistantPanelView: View {
             .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
-        .help(voice.isListening ? "Stop dictation" : "Dictate")
+        .paneTooltip(voice.isListening ? "Stop dictation" : "Dictate", anchor: .trailing)
         .accessibilityLabel(voice.isListening ? "Stop dictation" : "Dictate")
     }
 

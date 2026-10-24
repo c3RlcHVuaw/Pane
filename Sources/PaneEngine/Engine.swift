@@ -151,4 +151,6 @@ public protocol BrowserEngine: AnyObject {
     func setContentBlocking(_ on: Bool)
     /// Deletes cookies and cached files of a profile.
     func clearBrowsingData(for profile: BrowserProfile) async
+    /// Deletes the cookies one site has set.
+    func clearCookies(for url: String, profile: BrowserProfile) async
 }

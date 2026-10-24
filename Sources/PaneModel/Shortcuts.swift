@@ -31,6 +31,8 @@ public enum ShortcutCatalog {
         ShortcutSection(title: "Navigation", symbol: "arrow.left.arrow.right", items: [
             ShortcutItem(name: "Search Tabs, Bookmarks & History", keys: "⌘K"),
             ShortcutItem(name: "Open Location", keys: "⌘L"),
+            ShortcutItem(name: "Open File", keys: "⌘O"),
+            ShortcutItem(name: "Save Page As", keys: "⌘S"),
             ShortcutItem(name: "Fill Saved Login", keys: "⌥⌘L"),
             ShortcutItem(name: "Copy Page Address", keys: "⇧⌘C"),
             ShortcutItem(name: "Back", keys: "⌘["),
@@ -61,6 +63,7 @@ public enum ShortcutCatalog {
         ShortcutSection(title: "View", symbol: "sidebar.left", items: [
             ShortcutItem(name: "Toggle Sidebar", keys: "⌃⌘S"),
             ShortcutItem(name: "Ask the Assistant", keys: "⇧⌘A"),
+            ShortcutItem(name: "Floating Assistant Window", keys: "⌥⇧⌘A"),
             ShortcutItem(name: "Stop the Agent", keys: "⌘."),
             ShortcutItem(name: "Zoom In", keys: "⌘+"),
             ShortcutItem(name: "Zoom Out", keys: "⌘−"),

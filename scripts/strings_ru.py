@@ -138,7 +138,7 @@ RU = {
 "Appearance": "Оформление",
 "Assistant": "Ассистент",
 "Profiles": "Профили",
-"Account & Sync": "Аккаунт и синхронизация",
+"Account & Sync": "Аккаунт",
 "Shortcuts": "Клавиши",
 "Privacy": "Конфиденциальность",
 "Updates": "Обновления",

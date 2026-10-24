@@ -580,7 +580,9 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
 
 @implementation PCRuntime
 
-+ (BOOL)initializeWithCachePath:(NSString *)cachePath {
++ (BOOL)initializeWithCachePath:(NSString *)cachePath { return [self initializeWithCachePath:cachePath languages:@[@"en-US"]]; }
+
++ (BOOL)initializeWithCachePath:(NSString *)cachePath languages:(NSArray<NSString *> *)languages {
   g_loader = new CefScopedLibraryLoader();
   if (!g_loader->LoadInMain()) return NO;
 
@@ -591,6 +593,10 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
   s.external_message_pump = true;
   s.log_severity = LOGSEVERITY_WARNING;
   CefString(&s.root_cache_path) = cachePath.UTF8String;
+  if (languages.count) {
+    CefString(&s.locale) = languages.firstObject.UTF8String;
+    CefString(&s.accept_language_list) = [languages componentsJoinedByString:@","].UTF8String;
+  }
   CefString(&s.cache_path) = [cachePath stringByAppendingPathComponent:@"Default"].UTF8String;
   CefString(&s.main_bundle_path) = main.bundlePath.UTF8String;
   CefString(&s.framework_dir_path) =
@@ -606,6 +612,19 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
 }
 
 + (void)setAdBlocking:(BOOL)on { g_adBlock.store(on); }
+
++ (void)clearCookiesFor:(NSString *)url in:(PCContext *)context completion:(void (^)(void))completion {
+  struct Deleted : public CefDeleteCookiesCallback {
+    void (^block)(void);
+    explicit Deleted(void (^b)(void)) : block(b) {}
+    void OnComplete(int) override { dispatch_async(dispatch_get_main_queue(), block); }
+    IMPLEMENT_REFCOUNTING(Deleted);
+  };
+  CefRefPtr<CefRequestContext> ctx = context ? [context cefContext] : CefRequestContext::GetGlobalContext();
+  CefRefPtr<CefCookieManager> cookies = ctx ? ctx->GetCookieManager(nullptr) : nullptr;
+  if (!cookies) { completion(); return; }
+  cookies->DeleteCookies(url.UTF8String, "", new Deleted(completion));
+}
 
 + (void)clearBrowsingDataIn:(PCContext *)context completion:(void (^)(void))completion {
   struct Done : public CefCompletionCallback {

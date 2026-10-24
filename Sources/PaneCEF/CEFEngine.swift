@@ -6,10 +6,10 @@ import PaneEngine
 public final class CEFEngine: BrowserEngine {
     private let cacheRoot: URL
 
-    public init?(cacheDirectory: URL) {
+    public init?(cacheDirectory: URL, languages: [String] = ProcessInfo.processInfo.environment["PANE_LANGS"].map { $0.components(separatedBy: ",") } ?? ["en-US"]) {
         cacheRoot = cacheDirectory
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-        guard PCRuntime.initialize(withCachePath: cacheDirectory.path) else { return nil }
+        guard PCRuntime.initialize(withCachePath: cacheDirectory.path, languages: languages) else { return nil }
     }
 
     public func makeTab(url: String, in host: NSView, profile: BrowserProfile) -> BrowserTab {
@@ -25,6 +25,11 @@ public final class CEFEngine: BrowserEngine {
 
     public func shutdown() { PCRuntime.shutdown() }
     public func setContentBlocking(_ on: Bool) { PCRuntime.setAdBlocking(on) }
+    public func clearCookies(for url: String, profile: BrowserProfile) async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            PCRuntime.clearCookies(for: url, in: profile.engineHandle as? PCContext) { c.resume() }
+        }
+    }
     public func clearBrowsingData(for profile: BrowserProfile) async {
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             PCRuntime.clearBrowsingData(in: profile.engineHandle as? PCContext) { c.resume() }

@@ -26,6 +26,7 @@ if [ "${PUBLISH_DMG:-0}" = "1" ]; then
   echo "Uploading installer…"
   upload "dist/Pane-$(cat VERSION).dmg" "Pane.dmg"
 fi
+[ -f dist/releases.json ] && upload dist/releases.json releases.json
 upload dist/latest.json latest.json
 "${SSH[@]}" "cd '$DIR' && ls -t Pane-*.zip | tail -n +3 | xargs -r rm -f"
 

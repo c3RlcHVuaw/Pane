@@ -72,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // so a test instance never touches the real session or steals focus.
         let env = ProcessInfo.processInfo.environment
         let dataRoot = env["PANE_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) } ?? support.appendingPathComponent("Pane")
-        guard let engine = CEFEngine(cacheDirectory: dataRoot) else {
+        let languages: [String] = AppLanguage.current.hasPrefix("ru") ? ["ru-RU", "ru", "en-US", "en"] : ["en-US", "en"]
+        guard let engine = CEFEngine(cacheDirectory: dataRoot, languages: languages) else {
             let alert = NSAlert()
             alert.messageText = tr("Could not start the Chromium engine")
             alert.informativeText = tr("The CEF framework is missing from the app bundle.")
@@ -146,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if env["PANE_DEBUG_FULLSCREEN"] != nil { Task { @MainActor in try? (await win?.debugFullscreen() ?? "").write(toFile: prefix + "-fullscreen.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_CONTEXT"] != nil { Task { @MainActor in try? (await win?.debugContextMenus() ?? "").write(toFile: prefix + "-context.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_RIGHTCLICK"] != nil { Task { @MainActor in await win?.debugRightClick() } }
+                    if env["PANE_DEBUG_INTERNAL"] != nil { Task { @MainActor in try? (await win?.debugInternalPages() ?? "").write(toFile: prefix + "-internal.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_PEEK"] != nil { win?.debugPeek() }
                     if env["PANE_DEBUG_FOCUS_ADDRESS"] != nil { win?.focusAddressBar() }
                     if env["PANE_DEBUG_HOVER"] != nil { win?.debugHoverToolbar() }
@@ -359,6 +361,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func nextWorkspace(_ s: Any?) { active?.nextWorkspace(s) }
     @objc func previousWorkspace(_ s: Any?) { active?.previousWorkspace(s) }
     @objc func toggleReader(_ s: Any?) { active?.toggleReader(s) }
+    @objc func openFile(_ s: Any?) { active?.openFile(s) }
+    @objc func savePageAs(_ s: Any?) { active?.savePageAs(s) }
+    @objc func sharePage(_ s: Any?) { active?.sharePage(s) }
+    @objc func toggleFloatingAssistant(_ s: Any?) { active?.toggleFloatingAssistant(s) }
     @objc func showDevTools(_ s: Any?) { active?.showDevTools(s) }
     @objc func viewSource(_ s: Any?) { active?.viewSource(s) }
     @objc func addNote(_ s: Any?) { active?.addNote(s) }
@@ -423,6 +429,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("Reopen Closed Tab", #selector(reopenClosedTab(_:)), "t", target: self, mods: [.command, .shift]),
             item("Close Window", #selector(NSWindow.performClose(_:)), "w", mods: [.command, .shift]),
             .separator(),
+            item("Open File…", #selector(openFile(_:)), "o", target: self),
+            item("Save Page As…", #selector(savePageAs(_:)), "s", target: self),
+            item("Share Page…", #selector(sharePage(_:)), "", target: self),
+            .separator(),
             item("Print…", #selector(printPage(_:)), "p", target: self),
             item("Save Page as PDF…", #selector(savePDF(_:)), "", target: self),
         ])
@@ -442,6 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         submenu("View", [
             item("Toggle Sidebar", #selector(toggleSidebar(_:)), "s", target: self, mods: [.command, .control]),
             item("Ask the Assistant", #selector(toggleAssistant(_:)), "a", target: self, mods: [.command, .shift]),
+            item("Floating Assistant Window", #selector(toggleFloatingAssistant(_:)), "a", target: self, mods: [.command, .option, .shift]),
             item("Stop the Agent", #selector(stopAgent(_:)), ".", target: self),
             .separator(),
             item("Reload Page", #selector(reloadPage(_:)), "r", target: self),
@@ -487,6 +498,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("Previous Workspace", #selector(previousWorkspace(_:)), "[", target: self, mods: [.command, .option]),
             .separator(),
             item("Next Tab", #selector(nextTab(_:)), "]", target: self, mods: [.command, .shift]),
+            item("Next Tab (⌃Tab)", #selector(nextTab(_:)), "\t", target: self, mods: [.control]),
+            item("Previous Tab (⌃⇧Tab)", #selector(prevTab(_:)), "\t", target: self, mods: [.control, .shift]),
             item("Previous Tab", #selector(prevTab(_:)), "[", target: self, mods: [.command, .shift]),
             .separator(),
         ] + (1...9).map { n in

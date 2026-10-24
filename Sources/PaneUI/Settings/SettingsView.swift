@@ -21,10 +21,13 @@ struct SettingsActions {
     var clearBrowsingData: () async -> Void
     var isDefaultBrowser: () -> Bool
     var makeDefaultBrowser: () -> Void
+    var releaseHistory: () async -> [ReleaseEntry]
+    var openPage: (String) -> Void
+    var showHistory: () -> Void
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, search, appearance, assistant, profiles, account, shortcuts, privacy, updates
+    case general, search, appearance, assistant, profiles, account, shortcuts, privacy, updates, advanced
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -37,6 +40,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: "Shortcuts"
         case .privacy: "Privacy"
         case .updates: "Updates"
+        case .advanced: "Advanced"
         }
     }
     var symbol: String {
@@ -50,6 +54,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: "keyboard.fill"
         case .privacy: "hand.raised.fill"
         case .updates: "arrow.down.circle.fill"
+        case .advanced: "wrench.and.screwdriver.fill"
         }
     }
     var tint: Color {
@@ -63,6 +68,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: .orange
         case .privacy: .red
         case .updates: .green
+        case .advanced: .gray
         }
     }
 }
@@ -82,6 +88,13 @@ struct IconBadge: View {
     }
 }
 
+/// Settings sidebar rows: a small icon with a little air around it.
+struct SettingsLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 10) { configuration.icon; configuration.title }
+    }
+}
+
 struct SettingsRoot: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var account: AccountSession
@@ -94,9 +107,11 @@ struct SettingsRoot: View {
     var body: some View {
         NavigationSplitView {
             List(SettingsPane.allCases, selection: $selection) { pane in
-                Label { Text(LocalizedStringKey(pane.title)) } icon: { IconBadge(symbol: pane.symbol, tint: pane.tint) }
+                Label { Text(LocalizedStringKey(pane.title)).font(.system(size: 13)) } icon: { IconBadge(symbol: pane.symbol, tint: pane.tint, size: 20) }
+                    .labelStyle(SettingsLabelStyle())
                     .tag(pane)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 3)
+                    .padding(.leading, 6)
             }
             .navigationSplitViewColumnWidth(min: 200, ideal: 210, max: 230)
         } detail: {
@@ -111,6 +126,7 @@ struct SettingsRoot: View {
                 case .shortcuts: ShortcutsPane()
                 case .privacy: PrivacyPane(settings: settings, actions: actions, vault: actions.vault)
                 case .updates: UpdatesPane(settings: settings, updates: updates, actions: actions)
+                case .advanced: AdvancedPane(actions: actions)
                 }
             }
             .navigationTitle(Text(LocalizedStringKey(selection.title)))
@@ -387,10 +403,11 @@ struct PrivacyPane: View {
     var body: some View {
         Form {
             Section {
+                Toggle("Show search suggestions in the address bar", isOn: $settings.webSuggestions)
                 Toggle("Block ads and trackers", isOn: $settings.blockAds)
                 Toggle("Remember a short snippet of each page for search", isOn: $settings.rememberPageText)
             } header: { Text("Content") } footer: {
-                Text("Pane refuses requests to well-known ad and tracking servers. Pages load faster and follow you less. If a site misbehaves, turn this off and reload. The snippets let ⌘K and the assistant find a page by what it says; they stay on this Mac and are cleared with your history.")
+                Text("Pane refuses requests to well-known ad and tracking servers. Pages load faster and follow you less. If a site misbehaves, turn this off and reload. With suggestions on, what you type in the address bar goes to your search engine as you type. The snippets let ⌘K and the assistant find a page by what it says; they stay on this Mac and are cleared with your history.")
             }
             Section {
                 Toggle("Offer to save passwords", isOn: $settings.offerToSavePasswords)
@@ -457,7 +474,8 @@ struct UpdatesPane: View {
 
     private var version: String {
         let i = Bundle.main.infoDictionary ?? [:]
-        return "Version \(i["CFBundleShortVersionString"] as? String ?? "?") (\(i["CFBundleVersion"] as? String ?? "?"))"
+        let v = i["CFBundleShortVersionString"] as? String ?? "?", b = i["CFBundleVersion"] as? String ?? "?"
+        return String(localized: "Version \(v) (\(b))")
     }
 
     var body: some View {
@@ -477,9 +495,43 @@ struct UpdatesPane: View {
                 statusRow
                 Toggle("Check for updates automatically", isOn: $settings.automaticUpdates)
             }
+            Section {
+                if history.isEmpty {
+                    HStack { ProgressView().controlSize(.small); Text("Loading the list of versions…").foregroundStyle(.secondary) }
+                } else {
+                    ForEach(Array(history.enumerated()), id: \.element.id) { i, r in
+                        DisclosureGroup(isExpanded: Binding(get: { open.contains(r.id) || (i == 0 && !closedFirst) }, set: { on in
+                            if on { open.insert(r.id) } else { open.remove(r.id); if i == 0 { closedFirst = true } }
+                        })) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                ForEach(Array(r.points.enumerated()), id: \.offset) { _, p in
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Circle().fill(Color.accentColor).frame(width: 4, height: 4).offset(y: -2)
+                                        Text(verbatim: p).font(.callout).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4).frame(maxWidth: .infinity, alignment: .leading)
+                        } label: {
+                            HStack {
+                                Text(verbatim: "\(r.version) (\(r.build))").font(.system(size: 13, weight: .semibold))
+                                if r.build == currentBuild { Text("Installed").font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Capsule().fill(Color.green.opacity(0.18))).foregroundStyle(.green) }
+                                Spacer()
+                                Text(verbatim: r.date).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: { Text("What changed in each version") }
         }
         .formStyle(.grouped)
+        .task { history = await actions.releaseHistory() }
     }
+
+    @State private var history: [ReleaseEntry] = []
+    @State private var open: Set<Int> = []
+    @State private var closedFirst = false
+    private var currentBuild: Int { Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0 }
 
     @ViewBuilder private var statusRow: some View {
         switch updates.state {
@@ -554,5 +606,62 @@ private struct ThemeSwatch: View {
         .onHover { h in withAnimation(.snappy(duration: 0.15)) { hover = h } }
         .accessibilityLabel(Text(verbatim: theme.title))
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+
+// MARK: Advanced
+
+/// Chromium's own diagnostic pages, and a shortcut to the full history.
+struct AdvancedPane: View {
+    let actions: SettingsActions
+
+    private let pages: [(symbol: String, title: LocalizedStringKey, detail: LocalizedStringKey, url: String)] = [
+        ("info.circle", "About this engine", "Chromium version and how it was built", "chrome://version"),
+        ("cpu", "Graphics", "What the graphics card is doing", "chrome://gpu"),
+        ("network", "Network", "Connections, DNS, proxies and a request log", "chrome://net-internals"),
+        ("video", "Calls and cameras", "WebRTC connections and their statistics", "chrome://webrtc-internals"),
+        ("play.rectangle", "Media players", "Audio and video playing right now", "chrome://media-internals"),
+        ("gearshape.2", "Service workers", "Background scripts of the sites you visit", "chrome://serviceworker-internals"),
+        ("square.stack.3d.up", "Processes", "Which page runs in which process", "chrome://process-internals"),
+        ("chart.bar", "Histograms", "Counters the engine keeps about itself", "chrome://histograms"),
+        ("desktopcomputer", "System", "Details about this Mac as the engine sees it", "chrome://system"),
+        ("doc.text", "Licences", "Open-source software inside Pane", "chrome://credits"),
+        ("list.bullet", "All internal pages", "Everything the engine can show", "chrome://chrome-urls"),
+    ]
+
+    var body: some View {
+        Form {
+            Section {
+                Button { actions.showHistory() } label: {
+                    HStack { Label("Browsing history", systemImage: "clock.arrow.circlepath"); Spacer(); Text("⌘Y").foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } header: { Text("History") } footer: {
+                Text("Search everything you have visited, delete single pages or clear all of it.")
+            }
+            Section {
+                ForEach(pages, id: \.url) { p in
+                    Button { actions.openPage(p.url) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: p.symbol).frame(width: 22).foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(p.title)
+                                Text(p.detail).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(verbatim: p.url.replacingOccurrences(of: "chrome://", with: "")).font(.caption.monospaced()).foregroundStyle(.tertiary)
+                            Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: { Text("Chromium internal pages") } footer: {
+                Text("These open in a new tab. They are for diagnosing problems; changing anything here is at your own risk. Chromium's own settings screens aren't part of Pane — everything you can change lives in these Settings.")
+            }
+        }
+        .formStyle(.grouped)
     }
 }

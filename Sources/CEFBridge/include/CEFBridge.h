@@ -93,9 +93,13 @@ NS_SWIFT_UI_ACTOR
 @interface PCRuntime : NSObject
 /// Loads the CEF framework from the main bundle and initializes it. Call once, after NSApp exists.
 + (BOOL)initializeWithCachePath:(NSString *)cachePath;
+/// `languages` are BCP-47 codes, most preferred first ("ru-RU", "en-US"): they decide the language of Chromium's own pages and the Accept-Language websites see.
++ (BOOL)initializeWithCachePath:(NSString *)cachePath languages:(NSArray<NSString *> *)languages;
 + (void)shutdown;
 /// Refuses sub-requests to known ad and tracker hosts. On by default.
 + (void)setAdBlocking:(BOOL)on;
+/// Deletes the cookies a site (a full address) has set.
++ (void)clearCookiesFor:(NSString *)url in:(nullable PCContext *)context completion:(void (^)(void))completion;
 /// Deletes cookies and the cache of the default storage (and of `context` when given).
 + (void)clearBrowsingDataIn:(nullable PCContext *)context completion:(void (^)(void))completion;
 /// Entry point for helper (renderer/GPU/...) processes. Returns the process exit code.

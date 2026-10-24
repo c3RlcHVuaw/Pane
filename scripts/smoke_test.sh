@@ -38,6 +38,7 @@ run features 30 PANE_DEBUG_FEATURES=1
 F="$OUT/features-features.txt"
 grep -q "bookmarked=true" "$F" 2>/dev/null && pass "bookmark + star pulse" || fail "bookmark"
 grep -q "history snippet: ad:" "$F" 2>/dev/null && pass "page text remembered for search" || fail "page text snippet"
+grep -q "mhtml: ok" "$F" 2>/dev/null && pass "save page as one file (MHTML)" || fail "save page"
 grep -q "h=28" "$F" 2>/dev/null && pass "sidebar tint colour" || fail "tint colour"
 grep -q "watch fired for: ads page" "$F" 2>/dev/null && pass "page watch" || fail "page watch"
 run pdf 14 PANE_DEBUG_PDF=1

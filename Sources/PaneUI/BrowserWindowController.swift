@@ -155,6 +155,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private var sidebarContentWidth: NSLayoutConstraint!
     private var barLeading: NSLayoutConstraint!
     private var resizeHandle: SidebarResizeHandle!
+    private var assistantResizeHandle: SidebarResizeHandle!
     private var expandedWidth: CGFloat = 250
     private var sidebarCollapsed = false
 
@@ -322,7 +323,14 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                     },
                     makeDefaultBrowser: {
                         for scheme in ["http", "https"] { NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpenURLsWithScheme: scheme) { _ in } }
-                    }))
+                    },
+                    releaseHistory: { [weak self] in
+                        let feed = ProcessInfo.processInfo.environment["PANE_UPDATE_FEED"] ?? (Bundle.main.infoDictionary?["PaneUpdateFeed"] as? String) ?? ""
+                        guard self != nil, let url = URL(string: feed) else { return [] }
+                        return await ReleaseHistory.load(feedURL: url)
+                    },
+                    openPage: { [weak self] url in self?.open(url, newTab: true) },
+                    showHistory: { [weak self] in self?.showHistory(nil) }))
         }
         settingsWindow?.show()
     }
@@ -415,6 +423,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         out.append("star pulse ran, bookmarked=\(bookmarks.isBookmarked("http://127.0.0.1:8765/ads.html"))")
         for _ in 0..<10 where history.entries.first(where: { $0.url.contains("ads.html") })?.snippet == nil { try? await Task.sleep(nanoseconds: 1_000_000_000) }
         out.append("history snippet: \(history.entries.first { $0.url.contains("ads.html") }?.snippet ?? "none")")
+        if let tab = activeLive?.tab, let raw = try? await tab.devTools("Page.captureSnapshot", params: "{\"format\":\"mhtml\"}"), let d = raw.data(using: .utf8),
+           let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any], let text = o["data"] as? String { out.append("mhtml: \(text.hasPrefix("From:") || text.contains("MIME-Version") ? "ok" : "odd") \(text.count) chars") } else { out.append("mhtml: failed") }
+        let suggest = await WebSuggestions.fetch("swift prog", engineID: "google")
+        out.append("web suggestions: \(suggest.isEmpty ? "none (offline?)" : "ok \(suggest.count)")")
         // Sidebar tint colour from an icon.
         let img = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { r in NSColor.systemOrange.setFill(); r.fill(); return true }
         out.append("dominant colour of an orange icon: \(DominantColor.of(img).map { "h=\(Int($0.hueComponent * 360)) s=\(String(format: "%.2f", $0.saturationComponent))" } ?? "none")")
@@ -512,6 +524,18 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             return "saved \(image.width)x\(image.height)"
         } catch { return "error: \(error.localizedDescription)" }
+    }
+
+    public func debugInternalPages() async -> String {
+        var out = ""
+        let custom = ProcessInfo.processInfo.environment["PANE_DEBUG_INTERNAL"].flatMap { $0.contains("://") ? $0.components(separatedBy: ",") : nil }
+        for u in custom ?? ["chrome://version", "chrome://flags", "chrome://gpu", "chrome://history", "chrome://settings", "chrome://downloads", "chrome://net-internals", "chrome://chrome-urls", "chrome://about", "chrome://inspect", "chrome://webrtc-internals", "chrome://media-internals", "chrome://serviceworker-internals", "chrome://sandbox", "chrome://system", "chrome://histograms", "chrome://process-internals", "chrome://cache", "chrome://credits", "chrome://dino"] {
+            store.addTab(url: u, activate: true); showActive()
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            let text = await activeLive?.tab.pageText() ?? ""
+            out += "\(u): \(store.activeTabID.flatMap { store.tab($0)?.title } ?? "") | \(text.prefix(70).replacingOccurrences(of: "\n", with: " "))\n"
+        }
+        return out
     }
 
     public func debugProbe() async -> String {
@@ -975,6 +999,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         lockIcon.imageScaling = .scaleProportionallyDown
         lockIcon.translatesAutoresizingMaskIntoConstraints = false
         lockIcon.isHidden = true
+        lockIcon.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showSiteInfo(_:))))
         fieldBox.addSubview(addressField)
         fieldBox.addSubview(starButton)
         fieldBox.addSubview(lockIcon)
@@ -1067,6 +1092,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             suggestions.topAnchor.constraint(equalTo: barBox.bottomAnchor, constant: 6),
         ])
 
+        assistantResizeHandle = SidebarResizeHandle()
+        assistantResizeHandle.translatesAutoresizingMaskIntoConstraints = false
+        assistantResizeHandle.isHidden = true
+        assistantResizeHandle.onDrag = { [weak self] dx in self?.resizeAssistant(by: dx) }
         resizeHandle = SidebarResizeHandle()
         resizeHandle.translatesAutoresizingMaskIntoConstraints = false
         resizeHandle.onDrag = { [weak self] dx in self?.resizeSidebar(by: dx) }
@@ -1082,6 +1111,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         assistantModel.agentPrivate = settings.agentPrivate
         assistantModel.onAgentPrivateChanged = { [weak self] on in self?.settings.agentPrivate = on }
         assistantModel.onSaveMacro = { [weak self] prompt in self?.saveMacro(prompt) }
+        assistantModel.onToggleFloating = { [weak self] in guard let self else { return }; self.setAssistantFloating(!self.assistantFloating) }
         assistantModel.onSend = { [weak self] q in
             guard let self else { return }
             if self.assistantModel.mode == .act { self.agent.send(q) } else { self.askAssistant(q) }
@@ -1102,7 +1132,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         edgeHover = HoverBox()
         edgeHover.translatesAutoresizingMaskIntoConstraints = false
         edgeHover.isHidden = !sidebarCollapsed
-        root.addSubview(column); root.addSubview(sidebarBox); root.addSubview(assistantBox); root.addSubview(resizeHandle); root.addSubview(edgeHover)
+        root.addSubview(column); root.addSubview(sidebarBox); root.addSubview(assistantBox); root.addSubview(resizeHandle); root.addSubview(assistantResizeHandle); root.addSubview(edgeHover)
         NSLayoutConstraint.activate([
             edgeHover.leadingAnchor.constraint(equalTo: root.leadingAnchor), edgeHover.widthAnchor.constraint(equalToConstant: 6),
             edgeHover.topAnchor.constraint(equalTo: root.topAnchor, constant: 44), edgeHover.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -1135,6 +1165,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             sidebarGlass.topAnchor.constraint(equalTo: sidebarBox.topAnchor, constant: 8),
             sidebarGlass.bottomAnchor.constraint(equalTo: sidebarBox.bottomAnchor, constant: -8),
 
+            assistantResizeHandle.centerXAnchor.constraint(equalTo: assistantBox.leadingAnchor, constant: 3),
+            assistantResizeHandle.widthAnchor.constraint(equalToConstant: 8),
+            assistantResizeHandle.topAnchor.constraint(equalTo: root.topAnchor),
+            assistantResizeHandle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             resizeHandle.centerXAnchor.constraint(equalTo: sidebarBox.trailingAnchor),
             resizeHandle.widthAnchor.constraint(equalToConstant: 8),
             resizeHandle.topAnchor.constraint(equalTo: root.topAnchor),
@@ -1317,10 +1351,89 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// The panel takes a third of a wide window and never less than 320 pt, so it stays readable on small windows
     /// without squeezing the page on big ones.
-    private var assistantTargetWidth: CGFloat { min(max((window?.frame.width ?? 1280) * 0.30, 330), 460) }
+    private var assistantTargetWidth: CGFloat {
+        let windowWidth = window?.frame.width ?? 1280
+        if let preferred = UserDefaults.standard.object(forKey: "assistantWidth") as? Double {
+            return min(max(CGFloat(preferred), 300), max(300, min(640, windowWidth * 0.6)))   // the width you dragged it to
+        }
+        return min(max(windowWidth * 0.30, 330), 460)
+    }
+
+    /// Dragging the panel's left edge changes its width (remembered).
+    private func resizeAssistant(by dx: CGFloat) {
+        guard assistantOpen else { return }
+        let width = min(max(assistantWidth.constant - dx, 300), max(300, min(640, (window?.frame.width ?? 1280) * 0.6)))
+        assistantWidth.constant = width
+        UserDefaults.standard.set(Double(width), forKey: "assistantWidth")
+    }
+
+    // MARK: Floating assistant window
+
+    private var floatingAssistant: NSPanel?
+    private var assistantFloating = false
+
+    /// Moves the assistant between the side of the window and a window of its own that stays above the browser.
+    func setAssistantFloating(_ on: Bool) {
+        guard on != assistantFloating else { return }
+        assistantFloating = on
+        assistantModel.isFloating = on
+        if on {
+            if assistantOpen { assistantOpen = false; assistantWidth.constant = 0; assistantButton.contentTintColor = nil }
+            showFloatingAssistant()
+        } else {
+            floatingAssistant?.orderOut(nil)
+            if !assistantOpen { toggleAssistant(nil) }
+        }
+        assistantButton.contentTintColor = (assistantOpen || (assistantFloating && floatingAssistant?.isVisible == true)) ? .controlAccentColor : nil
+    }
+
+    private func showFloatingAssistant() {
+        if floatingAssistant == nil {
+            let host = NSHostingView(rootView: AssistantPanelView(model: assistantModel, session: assistantSession, agent: agent))
+            host.sizingOptions = []
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 640), styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .utilityWindow],
+                                backing: .buffered, defer: false)
+            panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
+            panel.isFloatingPanel = true; panel.level = .floating; panel.hidesOnDeactivate = false
+            panel.isMovableByWindowBackground = true; panel.isReleasedWhenClosed = false
+            panel.isOpaque = false; panel.backgroundColor = .clear
+            panel.minSize = NSSize(width: 300, height: 360)
+            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true; panel.standardWindowButton(.zoomButton)?.isHidden = true
+            panel.contentView = Glass.surface(content: host, cornerRadius: 0)
+            panel.setFrameAutosaveName("PaneFloatingAssistant")
+            if !panel.setFrameUsingName("PaneFloatingAssistant"), let w = window {
+                let f = w.frame; panel.setFrameOrigin(NSPoint(x: f.maxX - 420, y: f.minY + 60))
+            }
+            panel.delegate = floatingDelegate
+            floatingAssistant = panel
+        }
+        refreshAssistantModel()
+        floatingAssistant?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in MainActor.assumeIsolated { self?.assistantModel.focusToken += 1 } }
+    }
+
+    private lazy var floatingDelegate = FloatingDelegate { [weak self] in
+        guard let self, self.assistantFloating else { return }
+        self.assistantFloating = false; self.assistantModel.isFloating = false
+        self.assistantButton.contentTintColor = nil
+    }
+
+    private final class FloatingDelegate: NSObject, NSWindowDelegate {
+        let onClose: () -> Void
+        init(onClose: @escaping () -> Void) { self.onClose = onClose }
+        func windowWillClose(_ notification: Notification) { MainActor.assumeIsolated { onClose() } }
+    }
+
+    /// View ▸ Floating Assistant Window.
+    @objc public func toggleFloatingAssistant(_ sender: Any?) { setAssistantFloating(!assistantFloating) }
 
     @objc public func toggleAssistant(_ sender: Any?) {
+        if assistantFloating {
+            if let p = floatingAssistant, p.isVisible { p.orderOut(nil); assistantButton.contentTintColor = nil } else { showFloatingAssistant(); assistantButton.contentTintColor = .controlAccentColor }
+            return
+        }
         assistantOpen.toggle()
+        assistantResizeHandle.isHidden = !assistantOpen
         if assistantOpen { refreshAssistantModel() }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.01 : 0.32
@@ -2242,9 +2355,22 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         guard (obj.object as? NSTextField) === addressField, isEditingAddress else { return }
         let q = addressField.stringValue.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty, q != addressFull else { suggestions.hide(); return }
-        let hits = search.keywordSearch(q, in: searchItems(), limit: 6)
+        let hits = search.keywordSearch(q, in: searchItems(), limit: 5)
         suggestions.show(hits.map { .hit($0) } + [.web(q)])
+        // The search engine's own suggestions follow a moment later, if it has any (they only go out when this is on).
+        suggestTask?.cancel()
+        guard settings.webSuggestions, !isPrivate || true, !AddressInput.looksLikeAddress(q) else { return }
+        let engine = settings.searchEngineID
+        suggestTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            let found = await WebSuggestions.fetch(q, engineID: engine)
+            guard let self, !Task.isCancelled, self.isEditingAddress, self.addressField.stringValue.trimmingCharacters(in: .whitespaces) == q, !found.isEmpty else { return }
+            self.suggestions.show(hits.map { .hit($0) } + [.web(q)] + found.map { .suggestion($0) })
+        }
     }
+
+    private var suggestTask: Task<Void, Never>?
 
     private func chooseSuggestion(_ row: AddressSuggestionsView.Row) {
         suggestions.hide()
@@ -2252,6 +2378,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         switch row {
         case .hit(let h): paletteChose(.item(h.item), newTab: false)
         case .web(let q): paletteChose(.web(q), newTab: false)
+        case .suggestion(let s): paletteChose(.web(s), newTab: false)
         }
     }
 
@@ -2343,6 +2470,71 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// After cookies are gone, pages that were signed in should notice: reload the visible one.
     func liveTabsReload() { activeLive?.tab.reload() }
+
+    // MARK: Files and sharing
+
+    /// ⌘O: opens a file from this Mac (a page, a PDF, an image…) in a tab.
+    @objc public func openFile(_ s: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.html, .xml, .pdf, .image, .plainText, .json, .movie, .audio, .svg]
+        panel.message = tr("Choose a file to open in Pane")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        open(url.absoluteString, newTab: store.tab(store.activeTabID ?? UUID())?.url.isEmpty == false)
+    }
+
+    /// ⌘S: saves the page, with its images and styles, as one file you can open later.
+    @objc public func savePageAs(_ s: Any?) {
+        guard let tab = activeLive?.tab, let t = store.activeTabID.flatMap({ store.tab($0) }) else { NSSound.beep(); return }
+        Task { @MainActor in
+            guard let raw = try? await tab.devTools("Page.captureSnapshot", params: "{\"format\":\"mhtml\"}"), let d = raw.data(using: .utf8),
+                  let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any], let text = o["data"] as? String else {
+                ToastView.show(in: webHost, message: "Couldn't save the page", symbol: "exclamationmark.triangle.fill", duration: 3); return
+            }
+            let panel = NSSavePanel()
+            let base = t.displayTitle.replacingOccurrences(of: "/", with: "-")
+            panel.nameFieldStringValue = (base.isEmpty ? "page" : base) + ".mhtml"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do { try text.write(to: url, atomically: true, encoding: .utf8); ToastView.show(in: webHost, message: String(localized: "Saved \(url.lastPathComponent)"), symbol: "doc.fill", actionTitle: "Show in Finder", duration: 5) { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+            catch { ToastView.show(in: webHost, message: "Couldn't save the page", symbol: "exclamationmark.triangle.fill", duration: 3) }
+        }
+    }
+
+    /// Share sheet for the current page (Messages, Mail, AirDrop, Notes…).
+    @objc public func sharePage(_ s: Any?) {
+        guard let t = store.activeTabID.flatMap({ store.tab($0) }), let url = URL(string: t.url), t.url.hasPrefix("http") else { NSSound.beep(); return }
+        NSSharingServicePicker(items: [url]).show(relativeTo: addressField.bounds, of: addressField, preferredEdge: .maxY)
+    }
+
+    // MARK: Site information (the padlock)
+
+    private var sitePopover: NSPopover?
+
+    /// Click on the padlock: what this connection is, what the site may do, and a way to forget it.
+    @objc func showSiteInfo(_ s: Any?) {
+        guard let id = store.activeTabID, let t = store.tab(id), let url = URL(string: t.url), let host = url.host else { return }
+        if let p = sitePopover, p.isShown { p.performClose(nil); return }
+        let origin = "\(url.scheme ?? "https")://\(host)"
+        let granted = grantedPermissions.filter { $0.key.hasPrefix(origin + "|") }.map { (kind: String($0.key.dropFirst(origin.count + 1)), allowed: $0.value) }.sorted { $0.kind < $1.kind }
+        let pop = NSPopover(); pop.behavior = .transient
+        let host_ = NSHostingController(rootView: SiteInfoView(
+            host: host, secure: url.scheme == "https", permissions: granted,
+            onReset: { [weak self] kind in self?.grantedPermissions["\(origin)|\(kind)"] = nil },
+            onClearCookies: { [weak self, weak pop] in
+                guard let self else { return }
+                pop?.performClose(nil)
+                Task { @MainActor in
+                    await self.engine.clearCookies(for: origin, profile: self.profile)
+                    self.activeLive?.tab.reload()
+                    ToastView.show(in: self.webHost, message: String(localized: "Cookies of \(host) deleted"), symbol: "trash", duration: 3)
+                }
+            },
+            onNote: { [weak self, weak pop] in pop?.performClose(nil); self?.addNote(nil) }))
+        host_.sizingOptions = [.preferredContentSize]
+        pop.contentViewController = host_
+        sitePopover = pop
+        pop.show(relativeTo: lockIcon.bounds, of: lockIcon, preferredEdge: .maxY)
+    }
 
     /// Chromium's developer tools for the current page (⌥⌘I).
     @objc public func showDevTools(_ s: Any?) { activeLive?.tab.showDevTools() ?? NSSound.beep() }
