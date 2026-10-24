@@ -345,6 +345,8 @@ class PCClient : public CefClient, public CefLifeSpanHandler, public CefDisplayH
   }
 
   void OnAfterCreated(CefRefPtr<CefBrowser> b) override { [owner_ didCreate:b]; }
+  // The default would also close the whole window that hosts the page; the app closes its windows itself.
+  bool DoClose(CefRefPtr<CefBrowser>) override { return true; }
   void OnBeforeClose(CefRefPtr<CefBrowser>) override { [owner_ didClose]; }
   bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>, int, const CefString &url,
                      const CefString &, CefLifeSpanHandler::WindowOpenDisposition, bool,

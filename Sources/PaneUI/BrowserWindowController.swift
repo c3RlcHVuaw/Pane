@@ -896,7 +896,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     public func windowShouldClose(_ sender: NSWindow) -> Bool {
         let env = ProcessInfo.processInfo.environment
-        return env["PANE_DEBUG_STRESS_ALL"] == nil && env["PANE_DEBUG_SIDEBAR"] == nil
+        return env["PANE_DEBUG_STRESS_ALL"] == nil
     }
 
     public func windowWillClose(_ notification: Notification) {
