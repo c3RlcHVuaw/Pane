@@ -96,7 +96,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                         terminate: { NSApp.terminate(nil) })
         }
         let syncBase = env["PANE_SYNC_URL"] ?? info["PaneSyncURL"] as? String ?? "https://pane.2-26-86-13.sslip.io"
-        if let url = URL(string: syncBase) {
+        // A test instance (PANE_SUPPORT_DIR / PANE_OFFSCREEN) must never talk to the sync server with the real account's
+        // saved sign-in: it would push its test bookmarks and settings into the user's real data. Tests opt in with PANE_SYNC_URL.
+        let isTestRun = env["PANE_SUPPORT_DIR"] != nil || env["PANE_OFFSCREEN"] != nil
+        if let url = URL(string: syncBase), !isTestRun || env["PANE_SYNC_URL"] != nil {
             let engine = SyncEngine(transport: HTTPTransport(baseURL: url), tokens: KeychainTokenStore(),
                                     stateURL: dataRoot.appendingPathComponent("sync-state.json"),
                                     bookmarks: bookmarks, settings: settings, session: account)
