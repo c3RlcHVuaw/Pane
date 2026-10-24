@@ -29,11 +29,11 @@
 <table>
 <tr>
 <td width="50%"><img src="docs/images/palette.png" alt="Command palette"></td>
-<td width="50%"><img src="docs/images/dark.png" alt="Dark mode"></td>
+<td width="50%"><img src="docs/images/start.png" alt="Start page"></td>
 </tr>
 <tr>
 <td><b>⌘K palette</b> — search tabs, bookmarks and history by keywords and by meaning, with Russian word forms.</td>
-<td><b>Glass everywhere</b> — light, dark and colour themes; the sidebar takes the colour of the site you are on.</td>
+<td><b>Glass everywhere</b> — light, dark and colour themes; a start page with your favourites; the sidebar takes the colour of the site you are on.</td>
 </tr>
 </table>
 
