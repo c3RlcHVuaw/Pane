@@ -29,7 +29,7 @@ struct SettingsActions {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, search, appearance, assistant, profiles, account, shortcuts, privacy, updates, icon, advanced
+    case general, search, appearance, assistant, profiles, account, shortcuts, privacy, autofill, updates, extensions, icon, advanced
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -42,6 +42,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: "Shortcuts"
         case .privacy: "Privacy"
         case .updates: "Updates"
+        case .autofill: "AutoFill"
+        case .extensions: "Extensions"
         case .icon: "Icon"
         case .advanced: "Advanced"
         }
@@ -57,6 +59,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: "keyboard.fill"
         case .privacy: "hand.raised.fill"
         case .updates: "arrow.down.circle.fill"
+        case .autofill: "person.text.rectangle.fill"
+        case .extensions: "puzzlepiece.extension.fill"
         case .icon: "app.fill"
         case .advanced: "wrench.and.screwdriver.fill"
         }
@@ -72,6 +76,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .shortcuts: .orange
         case .privacy: .red
         case .updates: .green
+        case .autofill: .cyan
+        case .extensions: .mint
         case .icon: .orange
         case .advanced: .gray
         }
@@ -131,6 +137,8 @@ struct SettingsRoot: View {
                 case .shortcuts: ShortcutsPane()
                 case .privacy: PrivacyPane(settings: settings, actions: actions, vault: actions.vault)
                 case .updates: UpdatesPane(settings: settings, updates: updates, actions: actions)
+                case .autofill: AutofillPane()
+                case .extensions: ExtensionsPane()
                 case .icon: IconPane(settings: settings)
                 case .advanced: AdvancedPane(settings: settings, actions: actions)
                 }

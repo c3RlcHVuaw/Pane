@@ -6,10 +6,12 @@ import PaneEngine
 public final class CEFEngine: BrowserEngine {
     private let cacheRoot: URL
 
-    public init?(cacheDirectory: URL, languages: [String] = ProcessInfo.processInfo.environment["PANE_LANGS"].map { $0.components(separatedBy: ",") } ?? ["en-US"]) {
+    public init?(cacheDirectory: URL, languages: [String] = ProcessInfo.processInfo.environment["PANE_LANGS"].map { $0.components(separatedBy: ",") } ?? ["en-US"], extensionPaths: [String] = []) {
         cacheRoot = cacheDirectory
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        PCRuntime.setExtensionPaths(extensionPaths)
         guard PCRuntime.initialize(withCachePath: cacheDirectory.path, languages: languages) else { return nil }
+        PCRuntime.setSpellcheckLanguages(languages.map { $0.hasPrefix("en") ? $0 : String($0.prefix(2)) }.filter { !$0.isEmpty })
     }
 
     public func makeTab(url: String, in host: NSView, profile: BrowserProfile) -> BrowserTab {

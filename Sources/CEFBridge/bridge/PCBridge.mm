@@ -47,11 +47,29 @@ static void SchedulePump(int64_t delayMs) {
 
 // MARK: - App
 
+static std::string g_extensionPaths;
+static NSArray<NSString *> *g_spellLanguages;
+
+static void ApplySpellPrefs(CefRefPtr<CefRequestContext> c) {
+  if (!c || !g_spellLanguages.count) return;
+  CefString err;
+  CefRefPtr<CefValue> on = CefValue::Create(); on->SetBool(true);
+  bool r1 = c->SetPreference("browser.enable_spellchecking", on, err);
+  if (getenv("PANE_DEBUG_SPELL")) NSLog(@"spell pref1=%d err=%s can=%d", r1, err.ToString().c_str(), c->CanSetPreference("spellcheck.dictionaries"));
+  CefRefPtr<CefListValue> l = CefListValue::Create();
+  size_t i = 0;
+  for (NSString *code in g_spellLanguages) l->SetString(i++, code.UTF8String);
+  CefRefPtr<CefValue> v = CefValue::Create(); v->SetList(l);
+  bool r2 = c->SetPreference("spellcheck.dictionaries", v, err);
+  if (getenv("PANE_DEBUG_SPELL")) NSLog(@"spell pref2=%d err=%s", r2, err.ToString().c_str());
+}
+
 class PCApp : public CefApp, public CefBrowserProcessHandler {
  public:
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
   void OnBeforeCommandLineProcessing(const CefString &, CefRefPtr<CefCommandLine> cl) override {
     cl->AppendSwitch("use-mock-keychain");
+    if (!g_extensionPaths.empty()) cl->AppendSwitchWithValue("load-extension", g_extensionPaths);
     // Pages keep running while another window covers Pane (the agent works in the background, downloads and calls continue).
     cl->AppendSwitch("disable-backgrounding-occluded-windows");
     cl->AppendSwitch("disable-renderer-backgrounding");
@@ -402,6 +420,7 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
   CefRequestContextSettings s;
   CefString(&s.cache_path) = path.UTF8String;
   c->_ctx = CefRequestContext::CreateContext(s, nullptr);
+  ApplySpellPrefs(c->_ctx);
   return c;
 }
 - (CefRefPtr<CefRequestContext>)cefContext { return _ctx; }
@@ -597,6 +616,12 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
 // MARK: - PCRuntime
 
 @implementation PCRuntime
+
++ (void)setSpellcheckLanguages:(NSArray<NSString *> *)codes {
+  g_spellLanguages = [codes copy];
+  ApplySpellPrefs(CefRequestContext::GetGlobalContext());
+}
++ (void)setExtensionPaths:(NSArray<NSString *> *)paths { g_extensionPaths = [[paths componentsJoinedByString:@","] UTF8String] ?: ""; }
 
 + (BOOL)initializeWithCachePath:(NSString *)cachePath { return [self initializeWithCachePath:cachePath languages:@[@"en-US"]]; }
 

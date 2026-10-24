@@ -76,7 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let env = ProcessInfo.processInfo.environment
         let dataRoot = env["PANE_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) } ?? support.appendingPathComponent("Pane")
         let languages: [String] = AppLanguage.current.hasPrefix("ru") ? ["ru-RU", "ru", "en-US", "en"] : ["en-US", "en"]
-        guard let engine = CEFEngine(cacheDirectory: dataRoot, languages: languages) else {
+        AutofillStore.shared.configure(file: dataRoot.appendingPathComponent("autofill.json"))
+        let extensionsRoot = dataRoot.appendingPathComponent("Extensions")
+        ExtensionStore.shared.configure(root: extensionsRoot)
+        guard let engine = CEFEngine(cacheDirectory: dataRoot, languages: languages, extensionPaths: ExtensionStore.enabledPaths(root: extensionsRoot)) else {
             let alert = NSAlert()
             alert.messageText = tr("Could not start the Chromium engine")
             alert.informativeText = tr("The CEF framework is missing from the app bundle.")
@@ -141,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     if env["PANE_DEBUG_PW"] != nil { Task { @MainActor in try? (await win?.debugPasswords() ?? "").write(toFile: prefix + "-pw.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_STRESS_ALL"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugStressEverything(rounds: n) ?? "").write(toFile: prefix + "-stress.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_SIDEBAR"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugSidebarStress(steps: n) ?? "").write(toFile: prefix + "-sidebar.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_AUTOFILL"] != nil { Task { @MainActor in try? (await win?.debugAutofill() ?? "").write(toFile: prefix + "-autofill.txt", atomically: true, encoding: .utf8) } }
                     if let l = env["PANE_DEBUG_LONG"] { win?.debugLongStrings(Set(l.split(separator: ",").map(String.init))) }
                     if env["PANE_DEBUG_FEATURES"] != nil { Task { @MainActor in try? (await win?.debugFeatures() ?? "").write(toFile: prefix + "-features.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_QUIT"].flatMap(Int.init) { Task { @MainActor in await win?.debugQuitAfterOpening(n) } }

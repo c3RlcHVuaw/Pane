@@ -37,6 +37,13 @@ echo "Sidebar stress: random moves, groups, pins, sleeps, closes"
 run sidebar 60 PANE_DEBUG_SIDEBAR=250
 grep -q "sidebar survived" "$OUT/sidebar-sidebar.txt" 2>/dev/null && pass "sidebar survived 250 random operations" || fail "sidebar stress did not finish"
 
+echo "AutoFill and spell check"
+run autofill 12 PANE_DEBUG_AUTOFILL=1
+grep -q "n=Anna Smith|e=anna@example.com" "$OUT/autofill-autofill.txt" 2>/dev/null && pass "address form filled" || fail "autofill"
+grep -q "cc=4242424242424242|ccn=ANNA SMITH|mm=03|yy=2029" "$OUT/autofill-autofill.txt" 2>/dev/null && pass "card form filled" || fail "card autofill"
+run spell 12 PANE_DEBUG_X=45 PANE_DEBUG_RIGHTCLICK=spell PANE_DEBUG_CONTEXT_LOG="$OUT/spell.txt"
+grep -q "misspelled=превет" "$OUT/spell.txt" 2>/dev/null && pass "Russian spell check suggests corrections" || fail "Russian spell check"
+
 echo "Features"
 run features 30 PANE_DEBUG_FEATURES=1
 F="$OUT/features-features.txt"

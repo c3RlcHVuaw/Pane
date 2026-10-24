@@ -1,4 +1,5 @@
 import AppKit
+import LocalAuthentication
 import PaneEngine
 import PaneModel
 import ScreenCaptureKit
@@ -537,11 +538,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// Debug aid: right-clicks inside the page with synthetic mouse events.
     public func debugRightClick() async {
-        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        let spell = ProcessInfo.processInfo.environment["PANE_DEBUG_RIGHTCLICK"] == "spell"
+        store.addTab(url: "http://127.0.0.1:8765/\(spell ? "spell" : "form").html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: spell ? 5_000_000_000 : 2_500_000_000)
         guard let tab = activeLive?.tab else { return }
         for type in ["mouseMoved", "mousePressed", "mouseReleased"] {
-            var p: [String: Any] = ["type": type, "x": 100, "y": 60]
+            var p: [String: Any] = ["type": type, "x": spell ? Double(ProcessInfo.processInfo.environment["PANE_DEBUG_X"] ?? "45")! : 100, "y": spell ? 32 : 60]
             if type != "mouseMoved" { p["button"] = "right"; p["clickCount"] = 1 }
             let data = try? JSONSerialization.data(withJSONObject: p)
             _ = try? await tab.devTools("Input.dispatchMouseEvent", params: data.flatMap { String(data: $0, encoding: .utf8) })
@@ -1691,6 +1693,43 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         Task { @MainActor in
             _ = try? await l.tab.devTools("Runtime.evaluate", params: Self.json(["expression": PasswordScripts.fill(user: login.user, password: pw)]))
         }
+    }
+
+    // MARK: AutoFill
+
+    func autofillAddress(_ a: AddressProfile, in tab: BrowserTab) {
+        Task { @MainActor in
+            let r = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": AutofillScripts.address(a), "returnByValue": true]))
+            if r?.contains("\"value\":0") == true { ToastView.show(in: webHost, message: tr("No matching fields found"), symbol: "text.cursor", duration: 2.2) }
+        }
+    }
+
+    /// Card numbers only leave the Keychain after Touch ID or the Mac's password.
+    func autofillCard(_ c: CardProfile, in tab: BrowserTab) {
+        Task { @MainActor in
+            let ok = await Self.authenticate(reason: tr("Fill in your card \(c.title)"))
+            guard ok, let number = AutofillStore.secret(for: c.id).value else { return }
+            _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": AutofillScripts.card(number: number, holder: c.holder, month: c.expMonth, year: c.expYear), "returnByValue": true]))
+        }
+    }
+
+    private static func authenticate(reason: String) async -> Bool {
+        if ProcessInfo.processInfo.environment["PANE_DEBUG_AUTOFILL"] != nil { return true }
+        let ctx = LAContext()
+        return (try? await ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
+    }
+
+    /// Debug aid: fills a sample address form and reports what the fields hold.
+    public func debugAutofill() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/address.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        guard let tab = activeLive?.tab else { return "no tab" }
+        var a = AddressProfile(); a.fullName = "Anna Smith"; a.email = "anna@example.com"; a.phone = "+1 555 0100"; a.street = "1 Main St"; a.city = "Boston"; a.postalCode = "02101"; a.country = "United States"
+        autofillAddress(a, in: tab)
+        _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": AutofillScripts.card(number: "4242424242424242", holder: "ANNA SMITH", month: "03", year: "2029")]))
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        let r = (try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "['n','e','t','a1','city','zip','country','cc','ccn','mm','yy'].map(i=>i+'='+document.getElementById(i).value).join('|')", "returnByValue": true]))) ?? "error"
+        return r
     }
 
     /// Menu: fills the (most recent) saved login for the current site.
@@ -2847,14 +2886,27 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     public func tab(_ tab: BrowserTab, showsContextMenu info: ContextMenuInfo) {
         guard let id = tabIDs[ObjectIdentifier(tab as AnyObject)], id == store.activeTabID || id == agentPrivateTabID, let l = live[id], let window else { return }
-        let menu = contextMenu(for: info, tab: tab, id: id)
-        if let log = ProcessInfo.processInfo.environment["PANE_DEBUG_CONTEXT_LOG"] {  // test runs record the menu instead of showing it
-            try? ("link=\(info.link) media=\(String(describing: info.media)) editable=\(info.isEditable) items=\(menu.items.count)").write(toFile: log, atomically: true, encoding: .utf8); return
+        let at = l.container.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard info.isEditable, info.misspelledWord.isEmpty else { presentContextMenu(info, tab: tab, id: id, at: at, spell: nil); return }
+        // The engine has no spell checker, so ask the page for the word at the caret and check it with the system's.
+        Task { @MainActor in
+            let reply = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": PageSpell.probeScript, "returnByValue": true]))
+            var found: PageSpell.Word?
+            if let w = PageSpell.parse(reply: reply), let sugg = PageSpell.check(w.text) { found = PageSpell.Word(text: w.text, start: w.start, end: w.end, kind: w.kind, suggestions: sugg) }
+            presentContextMenu(info, tab: tab, id: id, at: at, spell: found)
         }
-        menu.popUp(positioning: nil, at: l.container.convert(window.mouseLocationOutsideOfEventStream, from: nil), in: l.container)
     }
 
-    func contextMenu(for info: ContextMenuInfo, tab: BrowserTab, id: UUID) -> NSMenu {
+    private func presentContextMenu(_ info: ContextMenuInfo, tab: BrowserTab, id: UUID, at point: NSPoint, spell: PageSpell.Word?) {
+        guard let l = live[id] else { return }
+        let menu = contextMenu(for: info, tab: tab, id: id, spell: spell)
+        if let log = ProcessInfo.processInfo.environment["PANE_DEBUG_CONTEXT_LOG"] {  // test runs record the menu instead of showing it
+            try? ("link=\(info.link) media=\(String(describing: info.media)) editable=\(info.isEditable) misspelled=\(spell?.text ?? info.misspelledWord) suggestions=\((spell?.suggestions ?? info.suggestions).prefix(3)) items=\(menu.items.count)").write(toFile: log, atomically: true, encoding: .utf8); return
+        }
+        menu.popUp(positioning: nil, at: point, in: l.container)
+    }
+
+    func contextMenu(for info: ContextMenuInfo, tab: BrowserTab, id: UUID, spell: PageSpell.Word? = nil) -> NSMenu {
         let page = store.tab(id)?.url ?? info.pageURL
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -2863,7 +2915,14 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         func sep() { if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) } }
         func copyText(_ s: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
 
-        if !info.misspelledWord.isEmpty {
+        if let w = spell {
+            for s in w.suggestions.prefix(6) {
+                menu.addItem(ActionItem(s, bold: true) { Task { @MainActor in _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": PageSpell.replaceScript(w, with: s)])) } })
+            }
+            if w.suggestions.isEmpty { add(tr("No guesses found"), enabled: false) {} }
+            add(tr("Add to Dictionary"), "text.book.closed") { PageSpell.learn(w.text) }
+            sep()
+        } else if !info.misspelledWord.isEmpty {
             for s in info.suggestions { menu.addItem(ActionItem(s, bold: true) { tab.replaceMisspelling(s) }) }
             if info.suggestions.isEmpty { add(tr("No guesses found"), enabled: false) {} }
             add(tr("Add to Dictionary"), "text.book.closed") { tab.addToDictionary(info.misspelledWord) }
@@ -2926,6 +2985,17 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             sep()
         }
         if info.isEditable {
+            let auto = NSMenuItem(title: tr("AutoFill"), action: nil, keyEquivalent: "")
+            auto.image = NSImage(systemSymbolName: "person.text.rectangle", accessibilityDescription: nil)
+            let sub = NSMenu(); sub.autoenablesItems = false
+            for a in AutofillStore.shared.addresses { sub.addItem(ActionItem(a.title, symbol: "house") { [weak self] in self?.autofillAddress(a, in: tab) }) }
+            if !AutofillStore.shared.addresses.isEmpty && !AutofillStore.shared.cards.isEmpty { sub.addItem(.separator()) }
+            for c in AutofillStore.shared.cards { sub.addItem(ActionItem(c.title, symbol: "creditcard") { [weak self] in self?.autofillCard(c, in: tab) }) }
+            if !sub.items.isEmpty { sub.addItem(.separator()) }
+            sub.addItem(ActionItem(tr("Manage AutoFill…"), symbol: "gearshape") { [weak self] in self?.showSettings(nil) })
+            auto.submenu = sub
+            menu.addItem(auto)
+            sep()
             add(tr("Undo"), "arrow.uturn.backward") { tab.performEdit(.undo) }
             add(tr("Redo"), "arrow.uturn.forward") { tab.performEdit(.redo) }
             sep()

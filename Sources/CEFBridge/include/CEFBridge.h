@@ -95,6 +95,10 @@ NS_SWIFT_UI_ACTOR
 + (BOOL)initializeWithCachePath:(NSString *)cachePath;
 /// `languages` are BCP-47 codes, most preferred first ("ru-RU", "en-US"): they decide the language of Chromium's own pages and the Accept-Language websites see.
 + (BOOL)initializeWithCachePath:(NSString *)cachePath languages:(NSArray<NSString *> *)languages;
+/// Unpacked Chrome extensions to load; set before initializing.
++ (void)setExtensionPaths:(NSArray<NSString *> *)paths;
+/// Languages ("ru", "en-US") the spell checker works in; call after initializing.
++ (void)setSpellcheckLanguages:(NSArray<NSString *> *)codes;
 + (void)shutdown;
 /// Refuses sub-requests to known ad and tracker hosts. On by default.
 + (void)setAdBlocking:(BOOL)on;
