@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "Pane uses the microphone for dictation in the assistant, and when a web page asks to.";
+"NSSpeechRecognitionUsageDescription" = "Pane turns your speech into text for the assistant.";

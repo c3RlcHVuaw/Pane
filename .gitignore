@@ -1,0 +1,12 @@
+# Build products and downloaded dependencies
+.build/
+build/
+dist/
+third_party/
+*.xcodeproj
+# Local-only files
+.DS_Store
+.claude/
+*.local.md
+server/data/
+server/node_modules/

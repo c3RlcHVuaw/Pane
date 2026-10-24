@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "Pane использует микрофон для диктовки в ассистенте и когда этого просит страница.";
+"NSSpeechRecognitionUsageDescription" = "Pane превращает вашу речь в текст для ассистента.";
