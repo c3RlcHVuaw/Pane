@@ -1,0 +1,2 @@
+<!doctype html><title>video</title><body><canvas id=c width=320 height=180></canvas><video id=v muted autoplay playsinline width=320></video>
+<script>const c=document.getElementById('c'),x=c.getContext('2d');let t=0;setInterval(()=>{x.fillStyle='hsl('+(t++*5%360)+',70%,50%)';x.fillRect(0,0,320,180)},50);const v=document.getElementById('v');v.srcObject=c.captureStream(20);v.play();</script>

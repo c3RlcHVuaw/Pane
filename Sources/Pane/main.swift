@@ -123,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sync?.start()
         installMenu()
         if let t = env["PANE_DEBUG_THEME"].flatMap(ThemeChoice.init(rawValue:)) { settings.theme = t }
+        if env["PANE_DEBUG_AGENT_PRIVATE"] != nil { settings.agentPrivate = true }
         if let n = env["PANE_DEBUG_MEMBER"].flatMap(Int.init) { account.restore(email: "stepan@example.com", lastSync: Date()); account.debugSetMember(MemberInfo(number: n, since: Date(timeIntervalSince1970: 1714521600))) }
         if env["PANE_DEBUG_PRIVATE"] != nil { openPrivateWindow() }
         if let id = env["PANE_DEBUG_PROFILE"], let p = profiles.profile(id) { openProfile(p) }
@@ -343,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func nextWorkspace(_ s: Any?) { active?.nextWorkspace(s) }
     @objc func previousWorkspace(_ s: Any?) { active?.previousWorkspace(s) }
     @objc func toggleReader(_ s: Any?) { active?.toggleReader(s) }
+    @objc func addNote(_ s: Any?) { active?.addNote(s) }
     @objc func togglePictureInPicture(_ s: Any?) { active?.togglePictureInPicture(s) }
     @objc func showHistory(_ s: Any?) { active?.showHistory(s) }
     @objc func translatePage(_ s: Any?) { active?.translatePage(s) }
@@ -429,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("Split View", #selector(toggleSplit(_:)), "\\", target: self, mods: [.command, .option]),
             item("Translate Page", #selector(translatePage(_:)), "t", target: self, mods: [.command, .option]),
             item("Picture in Picture", #selector(togglePictureInPicture(_:)), "p", target: self, mods: [.command, .option]),
+            item("Note for This Page…", #selector(addNote(_:)), "n", target: self, mods: [.command, .option, .control]),
             item("Reader Mode", #selector(toggleReader(_:)), "r", target: self, mods: [.command, .option]),
             item("Summarize Page", #selector(summarizePage(_:)), "s", target: self, mods: [.command, .option]),
             item("Back", #selector(goBack(_:)), "[", target: self),

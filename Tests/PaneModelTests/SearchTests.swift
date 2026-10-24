@@ -8,6 +8,14 @@ final class SearchTests: XCTestCase {
         SearchItem(id: id, kind: kind, title: title, url: url, lastUsed: used, visits: visits)
     }
 
+    func testPageSnippetsAreSearchable() {
+        var a = item("1", .history, "Pricing", "https://example.com/p")
+        a.detail = "How we set prices for design subscriptions and why they changed in autumn"
+        let b = item("2", .history, "Contact", "https://example.com/c")
+        XCTAssertEqual(p.keywordSearch("subscriptions autumn", in: [a, b], limit: 5).first?.item.id, "1")
+        XCTAssertTrue(p.keywordSearch("subscriptions", in: [b], limit: 5).isEmpty)
+    }
+
     func testRussianWordForms() {
         let items = [item("1", .history, "Курсы валют на сегодня", "https://example.com/a"),
                      item("2", .history, "Рецепты борща", "https://example.com/b")]

@@ -46,6 +46,7 @@ public enum ShortcutCatalog {
             ShortcutItem(name: "Split View", keys: "⌥⌘\\"),
             ShortcutItem(name: "Translate Page", keys: "⌥⌘T"),
             ShortcutItem(name: "Picture in Picture", keys: "⌥⌘P"),
+            ShortcutItem(name: "Note for This Page", keys: "⌃⌥⌘N"),
             ShortcutItem(name: "Reader Mode", keys: "⌥⌘R"),
             ShortcutItem(name: "Summarize Page", keys: "⌥⌘S"),
             ShortcutItem(name: "Cancel Address Editing", keys: "esc"),

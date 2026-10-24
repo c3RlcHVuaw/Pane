@@ -104,3 +104,32 @@ final class CrashReportTests: XCTestCase {
         XCTAssertNil(CrashReporter.markLaunch(in: d))
     }
 }
+
+@MainActor
+final class NotesAndHistoryTests: XCTestCase {
+    func testNotesPerPage() {
+        let d = FileManager.default.temporaryDirectory.appendingPathComponent("notes-\(UUID())")
+        let n = NoteStore(directory: d)
+        n.set(url: "https://example.com/a?x=1", title: "A", text: "ask Anna")
+        XCTAssertEqual(n.note(forURL: "https://example.com/a?x=1")?.text, "ask Anna")
+        n.set(url: "https://example.com/a?x=1", title: "A", text: "ask Anna and Bob")
+        XCTAssertEqual(n.notes.count, 1)
+        XCTAssertEqual(NoteStore(directory: d).notes.first?.text, "ask Anna and Bob")
+        n.set(url: "https://example.com/a?x=1", title: "A", text: "  ")
+        XCTAssertTrue(n.notes.isEmpty, "empty text removes the note")
+    }
+
+    func testHistorySnippetIsKeptAndTrimmed() {
+        let h = HistoryStore()
+        h.record(url: "https://example.com/p", title: "Prices")
+        h.updateSnippet(url: "https://example.com/p", snippet: String(repeating: "x", count: 900))
+        XCTAssertEqual(h.entries.first?.snippet?.count, 400)
+    }
+
+    func testAgentHistoryKeepsNewestFirstAndCaps() {
+        let s = AgentHistoryStore(directory: nil)
+        for i in 0..<45 { s.upsert(AgentRunRecord(id: UUID(), date: Date(), title: "run \(i)", items: [])) }
+        XCTAssertEqual(s.runs.count, 40)
+        XCTAssertEqual(s.runs.first?.title, "run 44")
+    }
+}

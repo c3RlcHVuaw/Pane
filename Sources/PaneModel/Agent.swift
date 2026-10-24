@@ -72,8 +72,8 @@ public protocol AgentToolbox: AnyObject {
 
 // MARK: Timeline (what the user sees)
 
-public struct AgentStep: Identifiable, Equatable, Sendable {
-    public enum State: Sendable { case running, waiting, done, failed, denied }
+public struct AgentStep: Identifiable, Equatable, Sendable, Codable {
+    public enum State: String, Sendable, Codable { case running, waiting, done, failed, denied }
     public var id: String
     public var title: String
     public var symbol: String
@@ -88,7 +88,7 @@ public struct ApprovalRequest: Identifiable, Equatable, Sendable {
     public var symbol: String
 }
 
-public enum AgentItem: Identifiable, Equatable, Sendable {
+public enum AgentItem: Identifiable, Equatable, Sendable, Codable {
     case user(id: UUID, text: String)
     case assistant(id: UUID, text: String)
     case step(AgentStep)
@@ -113,8 +113,16 @@ public final class AgentSession: ObservableObject {
     @Published public private(set) var pendingApproval: ApprovalRequest?
     /// When true (the default), risky steps wait for an explicit Allow.
     public var confirmImportantActions = true
+    /// Identifies this conversation in the history list; a new one starts after `clear()`.
+    public private(set) var runID = UUID()
+    /// Called whenever a run ends, with the whole conversation so far (for the history).
+    public var onRunFinished: ((AgentRunRecord) -> Void)?
     /// Details about the user that the agent may type into forms (name, e-mail, city, work history…). Never passwords or card numbers.
     public var userDetails: () -> String = { "" }
+    /// Extra rules for this run (for example: you are in a private tab and can't see the user's bookmarks).
+    public var extraInstructions: () -> String = { "" }
+    /// Called when the conversation is cleared (new chat).
+    public var onCleared: (() -> Void)?
 
     public static let maxSteps = 30
     private let providerFactory: () -> AgentProvider?
@@ -215,6 +223,22 @@ public final class AgentSession: ObservableObject {
         stop()
         items.removeAll()
         history.removeAll()
+        runID = UUID()
+        onCleared?()
+    }
+
+    /// Brings a past conversation back into the panel so you can read it and carry on.
+    public func restore(_ run: AgentRunRecord) {
+        guard !isRunning else { return }
+        items = run.items
+        runID = run.id
+        history = run.items.compactMap { item -> AgentMessage? in
+            switch item {
+            case .user(_, let t): return AgentMessage(role: .user, blocks: [.text(t)])
+            case .assistant(_, let t): return AgentMessage(role: .assistant, blocks: [.text(t)])
+            default: return nil
+            }
+        }
     }
 
     private func finish() {
@@ -224,12 +248,16 @@ public final class AgentSession: ObservableObject {
         // A step still marked running (cancelled mid-way) shouldn't spin forever.
         for i in items.indices { if case .step(var s) = items[i], s.state == .running || s.state == .waiting { s.state = .failed; s.note = tr("Stopped"); items[i] = .step(s) } }
         toolbox.agentDidEnd()
+        if let first = items.compactMap({ item -> String? in if case .user(_, let t) = item { return t } else { return nil } }).first {
+            onRunFinished?(AgentRunRecord(id: runID, date: Date(), title: String(first.prefix(80)), items: items))
+        }
     }
 
     // MARK: The loop
 
     private func run(_ provider: AgentProvider) async {
         var steps = 0
+        var recentCalls: [String] = []
         while !Task.isCancelled {
             if steps >= Self.maxSteps {
                 items.append(.notice(id: UUID(), text: String(localized: "I stopped after \(Self.maxSteps) steps. Tell me to continue if you want me to keep going."), isError: false))
@@ -240,7 +268,7 @@ public final class AgentSession: ObservableObject {
             var calls: [(id: String, name: String, input: String)] = []
             var textIndex: Int?
             do {
-                for try await event in provider.stream(system: Self.systemPrompt() + Self.detailsBlock(userDetails()), messages: Self.pruned(history), tools: toolbox.tools) {
+                for try await event in provider.stream(system: Self.systemPrompt() + Self.detailsBlock(userDetails()) + extraInstructions(), messages: Self.pruned(history), tools: toolbox.tools) {
                     switch event {
                     case .text(let t):
                         text += t
@@ -267,6 +295,17 @@ public final class AgentSession: ObservableObject {
             var results: [AgentBlock] = []
             for call in calls {
                 steps += 1
+                // A model stuck in a loop repeats the same call. Tell it so, and after a few more tries give up.
+                let signature = call.name + "|" + call.input
+                recentCalls.append(signature)
+                if recentCalls.suffix(4).count == 4, Set(recentCalls.suffix(4)).count == 1 {
+                    if recentCalls.suffix(7).count == 7, Set(recentCalls.suffix(7)).count == 1 {
+                        items.append(.notice(id: UUID(), text: tr("I kept repeating myself, so I stopped. Tell me what to try instead."), isError: false))
+                        return
+                    }
+                    results.append(.toolResult(id: call.id, content: "You have made this exact call several times in a row and nothing changes. Stop repeating it: answer the user with what you know, or try something different.", isError: true))
+                    continue
+                }
                 let r = await execute(call)
                 results.append(.toolResult(id: call.id, content: r.text, isError: r.isError))
                 if Task.isCancelled { break }

@@ -49,12 +49,14 @@ public final class DefaultSearchProvider: SearchProvider, @unchecked Sendable {
     private func score(_ tokens: [String], _ item: SearchItem, now: Date) -> Double? {
         let title = Self.fold(item.title), host = Self.fold(item.host), url = Self.fold(item.url)
         let titleWords = Self.words(item.title).map(Self.stem)
+        let detail = item.detail.isEmpty ? "" : Self.fold(item.detail)
         var total = 0.0
         for t in tokens {
             if let i = titleWords.firstIndex(where: { $0.hasPrefix(t) }) { total += i == 0 ? 3.5 : 3.0 }
             else if host.contains(t) { total += 2.4 }
             else if title.contains(t) { total += 2.0 }
             else if url.contains(t) { total += 1.0 }
+            else if !detail.isEmpty, detail.contains(t) { total += 1.4 }
             else if t.count >= 3, Self.isSubsequence(t, of: title) { total += 0.6 }
             else { return nil }
         }
@@ -64,6 +66,8 @@ public final class DefaultSearchProvider: SearchProvider, @unchecked Sendable {
         case .tab:
             s += 1.2
             if let d = item.lastUsed { s += 0.5 * exp(-now.timeIntervalSince(d) / 3600 / 6) }
+        case .note:
+            s += 1.6
         case .bookmark:
             s += 0.7
         case .history:
@@ -119,7 +123,7 @@ public final class DefaultSearchProvider: SearchProvider, @unchecked Sendable {
         var hits: [String: SearchHit] = [:]
         for item in items {
             if Task.isCancelled { return [] }
-            let t = vectors(item.title + " " + item.host, e, lang)
+            let t = vectors(item.title + " " + item.host + " " + String(item.detail.prefix(240)), e, lang)
             guard !t.isEmpty else { continue }
             // Each query word is matched with its closest word in the page title.
             let s = q.map { qv in t.map { Self.cosine(qv, $0) }.max() ?? 0 }.reduce(0, +) / Double(q.count)

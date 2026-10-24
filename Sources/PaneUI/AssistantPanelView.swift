@@ -22,9 +22,13 @@ final class AssistantPanelModel: ObservableObject {
     /// Mirrors the "ask before important actions" setting, inverted: on means the agent doesn't ask.
     @Published var autoApprove = false { didSet { if autoApprove != oldValue { onAutoApproveChanged(autoApprove) } } }
     var onAutoApproveChanged: (Bool) -> Void = { _ in }
+    @Published var agentPrivate = false { didSet { if agentPrivate != oldValue { onAgentPrivateChanged(agentPrivate) } } }
+    var onAgentPrivateChanged: (Bool) -> Void = { _ in }
     @Published var focusToken = 0
     var macros = MacroStore(directory: nil)
     var onSaveMacro: (String) -> Void = { _ in }
+    var history = AgentHistoryStore(directory: nil)
+    var onRestore: (AgentRunRecord) -> Void = { _ in }
     var onSend: (String) -> Void = { _ in }
     var onOpenSettings: () -> Void = {}
     var onClose: () -> Void = {}
@@ -41,6 +45,7 @@ struct AssistantPanelView: View {
     @ObservedObject var session: AssistantSession
     @ObservedObject var agent: AgentSession
     @FocusState private var composerFocused: Bool
+    @State private var showHistory = false
     @StateObject private var voice = VoiceInput()
     private var isAct: Bool { model.mode == .act }
     private var busy: Bool { isAct ? agent.isRunning : session.isStreaming }
@@ -82,9 +87,19 @@ struct AssistantPanelView: View {
     }
 
     private var header: some View {
+        // Wide panels show the title; narrow ones drop it instead of squeezing the controls out of place.
+        ViewThatFits(in: .horizontal) {
+            headerRow(showTitle: true)
+            headerRow(showTitle: false)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    private func headerRow(showTitle: Bool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkles").foregroundStyle(LinearGradient(colors: [.purple, .blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
-            Text("Assistant").font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize()
+            Image(systemName: "sparkles").font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(LinearGradient(colors: [.purple, .blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
+            if showTitle { Text("Assistant").font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize() }
             if model.agentEnabled {
                 HStack(spacing: 2) {
                     modeButton("Ask", .ask)
@@ -97,25 +112,37 @@ struct AssistantPanelView: View {
                 .accessibilityLabel("Assistant mode")
                 .help("Ask: answers questions about pages.  Act: controls the browser for you.")
             }
-            Spacer()
+            Spacer(minLength: 4)
             if isAct {
-                Button { withAnimation(.snappy) { model.autoApprove.toggle() } } label: {
-                    Image(systemName: model.autoApprove ? "checkmark.shield.fill" : "checkmark.shield")
-                        .foregroundStyle(model.autoApprove ? Color.orange : Color.primary.opacity(0.6))
-                        .symbolEffect(.bounce, value: model.autoApprove)
-                }
-                .buttonStyle(.plain)
-                .help(model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.")
-                .accessibilityLabel(model.autoApprove ? "Auto-approve on" : "Auto-approve off")
+                headerButton(symbol: model.autoApprove ? "checkmark.shield.fill" : "checkmark.shield", tint: model.autoApprove ? .orange : nil,
+                             help: model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.",
+                             label: model.autoApprove ? "Auto-approve on" : "Auto-approve off") { withAnimation(.snappy) { model.autoApprove.toggle() } }
+                    .symbolEffect(.bounce, value: model.autoApprove)
+                headerButton(symbol: model.agentPrivate ? "lock.shield.fill" : "lock.shield", tint: model.agentPrivate ? .purple : nil,
+                             help: model.agentPrivate ? "Private mode is on: the agent works in a private tab and can't see your bookmarks, history or logins. Click to turn off." : "Private mode is off. Turn on to make the agent work in a private tab that can't see your bookmarks, history or logins.",
+                             label: model.agentPrivate ? "Private mode on" : "Private mode off") { model.agentPrivate.toggle() }
+                headerButton(symbol: "clock.arrow.circlepath", tint: showHistory ? .accentColor : nil, help: "Past conversations", label: "Past conversations") { showHistory.toggle() }
+                    .popover(isPresented: $showHistory, arrowEdge: .bottom) {
+                        AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) })
+                    }
             }
             if isAct ? !agent.items.isEmpty : !session.messages.isEmpty {
-                Button { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).foregroundStyle(Color.primary.opacity(0.6)).help("New chat").accessibilityLabel("New chat")
+                headerButton(symbol: "square.and.pencil", tint: nil, help: "New chat", label: "New chat") { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } }
             }
-            Button { model.onClose() } label: { Image(systemName: "xmark") }
-                .buttonStyle(.plain).foregroundStyle(Color.primary.opacity(0.6)).help("Close  ⇧⌘A").accessibilityLabel("Close assistant")
+            headerButton(symbol: "xmark", tint: nil, help: "Close  ⇧⌘A", label: "Close assistant") { model.onClose() }
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
+    private func headerButton(symbol: String, tint: Color?, help: LocalizedStringKey, label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 13, weight: .medium))
+                .foregroundStyle(tint ?? Color.primary.opacity(0.6))
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(label)
     }
 
     // MARK: Setup
@@ -358,5 +385,65 @@ struct MarkdownText: View {
             }
         }
         .font(.system(size: 14)).lineSpacing(3).textSelection(.enabled)
+    }
+}
+
+
+/// Past agent conversations: tap one to bring it back.
+private struct AgentHistoryList: View {
+    @ObservedObject var history: AgentHistoryStore
+    let onPick: (AgentRunRecord) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Past conversations").font(.headline)
+                Spacer()
+                if !history.runs.isEmpty { Button("Clear") { history.clear() }.buttonStyle(.plain).foregroundStyle(.secondary).font(.callout) }
+            }
+            .padding(14)
+            Divider().opacity(0.5)
+            if history.runs.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 28)).foregroundStyle(.tertiary)
+                    Text("Nothing here yet — your finished conversations will appear here.").font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                .padding(24).frame(width: 300)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(history.runs) { run in Row(run: run, onPick: onPick, onDelete: { history.remove(run.id) }) }
+                    }
+                    .padding(6)
+                }
+                .frame(width: 320, height: min(CGFloat(history.runs.count) * 58 + 12, 360))
+            }
+        }
+    }
+
+    private struct Row: View {
+        let run: AgentRunRecord
+        let onPick: (AgentRunRecord) -> Void
+        let onDelete: () -> Void
+        @State private var hover = false
+        var body: some View {
+            Button { onPick(run) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "text.bubble").foregroundStyle(.secondary).frame(width: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: run.title).font(.system(size: 13)).lineLimit(2).multilineTextAlignment(.leading)
+                        Text(run.date.formatted(.relative(presentation: .named).locale(AppLanguage.currentLocale)) + (run.stepCount > 0 ? " · " + String(localized: "\(run.stepCount) steps") : ""))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    if hover { Button(action: onDelete) { Image(systemName: "trash") }.buttonStyle(.plain).foregroundStyle(.secondary).help("Delete") }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(hover ? 0.08 : 0)) }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hover = $0 }
+        }
     }
 }

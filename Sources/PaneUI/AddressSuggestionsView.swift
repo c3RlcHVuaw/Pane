@@ -104,9 +104,9 @@ final class AddressSuggestionsView: NSView, NSTableViewDataSource, NSTableViewDe
         let c = (tv.makeView(withIdentifier: id, owner: self) as? PaletteCell) ?? { let c = PaletteCell(); c.identifier = id; return c }()
         switch rows[row] {
         case .hit(let h):
-            let tag: String = { switch h.item.kind { case .tab: "Switch to Tab"; case .bookmark: "Bookmark"; case .history: "History" } }()
+            let tag: String = { switch h.item.kind { case .tab: "Switch to Tab"; case .bookmark: "Bookmark"; case .history: "History"; case .note: "Note" } }()
             c.configure(title: h.item.title.isEmpty ? h.item.host : h.item.title, subtitle: h.item.host, tag: tag,
-                        icon: icon(h.item.url), symbol: nil, meaning: false)
+                        icon: h.item.kind == .note ? nil : icon(h.item.url), symbol: h.item.kind == .note ? "note.text" : nil, meaning: false)
         case .web(let q):
             let isAddress = AddressInput.looksLikeAddress(q)
             c.configure(title: isAddress ? "Go to \(q)" : "Search \(engineName()) for “\(q)”", subtitle: isAddress ? "Open address" : "Web search",

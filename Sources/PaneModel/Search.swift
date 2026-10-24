@@ -1,7 +1,7 @@
 import Foundation
 
 public struct SearchItem: Sendable, Identifiable, Hashable {
-    public enum Kind: Int, Sendable { case tab, bookmark, history }
+    public enum Kind: Int, Sendable { case note = -1, tab = 0, bookmark = 1, history = 2 }
     public var id: String
     public var kind: Kind
     public var title: String
@@ -9,8 +9,11 @@ public struct SearchItem: Sendable, Identifiable, Hashable {
     public var tabID: UUID?
     public var lastUsed: Date?
     public var visits: Int
+    /// Extra searchable text (a snippet of the page), weighed less than the title.
+    public var detail: String
 
-    public init(id: String, kind: Kind, title: String, url: String, tabID: UUID? = nil, lastUsed: Date? = nil, visits: Int = 0) {
+    public init(id: String, kind: Kind, title: String, url: String, tabID: UUID? = nil, lastUsed: Date? = nil, visits: Int = 0, detail: String = "") {
+        self.detail = detail
         self.id = id; self.kind = kind; self.title = title; self.url = url
         self.tabID = tabID; self.lastUsed = lastUsed; self.visits = visits
     }

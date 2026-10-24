@@ -42,7 +42,11 @@ Vertical sidebar, tab groups, pinned tabs, **workspaces** you can switch in one 
 
 ### An agent that actually browses
 Switch the panel to **Act** and say what you want. The agent opens and closes tabs, searches, fills forms, organises bookmarks into folders, watches pages ("tell me when the price drops below 50 000"), compares sites and writes applications from your "About me" notes. You see every step with animations, it asks before anything risky (or turn on **auto-approve**), and it **never types passwords, card numbers or one-time codes**. Page text can't give it orders.
+Past conversations are kept (clock in the panel header) and can be reopened; **private mode** makes the agent work in a separate private tab that can't see your bookmarks, history, notes or logins.
 Bring your own key — Anthropic (Claude), OpenAI or any compatible server; it stays in the macOS Keychain.
+
+### Notes & memory
+Pin a **note** to any page (⌃⌥⌘N) — it pops up next time you visit and ⌘K finds it. Pane also keeps a short snippet of each page you visit, so you (and the assistant) can find "that article about prices I read on Tuesday" by what it said. Everything stays on your Mac.
 
 ### Reading tools
 Reader mode (⌥⌘R) · page summary (⌥⌘S) · **page translation** (⌥⌘T) · native **PDF viewer** with search · picture in picture (⌥⌘P) · history and downloads window (⌘Y) · dictation in the assistant.
@@ -93,6 +97,8 @@ Russian strings live in `scripts/strings_ru.py` (+ `strings_ru_extra.py`); `scri
 
 ### Releases (maintainers)
 `scripts/release.sh "notes"` builds, zips, writes the update feed and uploads it — `scripts/publish.sh` targets the author's server; change the host there. The sync server runs with `docker compose up -d` in `server/`.
+
+`scripts/smoke_test.sh` opens the built app and checks the things that broke before (window width, stress run, quit time, PDF, picture in picture…); `release.sh` runs it before publishing.
 
 Test runs never touch your real data: set `PANE_SUPPORT_DIR` (and `PANE_OFFSCREEN`) and the app uses its own folder, its own preferences and no sync. Many `PANE_DEBUG_*` switches (snapshots, stress runs, feature probes) are listed in `Sources/Pane/main.swift`.
 

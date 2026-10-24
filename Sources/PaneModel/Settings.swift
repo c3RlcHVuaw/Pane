@@ -64,6 +64,10 @@ public final class AppSettings: ObservableObject {
     @Published public var showBookmarksBar: Bool { didSet { save("showBookmarksBar", showBookmarksBar) } }
     /// Facts the agent may use to fill in forms and applications. Stays on this Mac (never synced).
     @Published public var aboutMe: String { didSet { save("aboutMe", aboutMe) } }
+    /// Keep a short snippet of each visited page for "find that article" searches. Local only.
+    @Published public var rememberPageText: Bool { didSet { save("rememberPageText", rememberPageText) } }
+    /// The agent works in a private tab and can't see bookmarks, history, notes or saved logins.
+    @Published public var agentPrivate: Bool { didSet { save("agentPrivate", agentPrivate) } }
     @Published public var theme: ThemeChoice { didSet { save("theme", theme.rawValue) } }
     @Published public var offerToSavePasswords: Bool { didSet { save("offerToSavePasswords", offerToSavePasswords) } }
     @Published public var sidebarTint: Bool { didSet { save("sidebarTint", sidebarTint) } }
@@ -92,6 +96,8 @@ public final class AppSettings: ObservableObject {
         sidebarTint = defaults.object(forKey: "sidebarTint") as? Bool ?? true
         offerToSavePasswords = defaults.object(forKey: "offerToSavePasswords") as? Bool ?? true
         aboutMe = defaults.string(forKey: "aboutMe") ?? ""
+        rememberPageText = defaults.object(forKey: "rememberPageText") as? Bool ?? true
+        agentPrivate = defaults.object(forKey: "agentPrivate") as? Bool ?? false
         theme = ThemeChoice(rawValue: defaults.string(forKey: "theme") ?? "") ?? .system
         assistantProvider = defaults.string(forKey: "assistantProvider") ?? "anthropic"
         assistantModel = defaults.string(forKey: "assistantModel") ?? "claude-sonnet-5-5"

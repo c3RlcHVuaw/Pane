@@ -45,8 +45,9 @@ struct AssistantPane: View {
             Section {
                 Toggle("Let the assistant control the browser (Act mode, experimental)", isOn: $settings.agentEnabled)
                 Toggle("Ask before important actions", isOn: $settings.agentConfirm).disabled(!settings.agentEnabled)
+                Toggle("Private mode: the agent works in a private tab", isOn: $settings.agentPrivate).disabled(!settings.agentEnabled)
             } header: { Text("Agent (Act mode)") } footer: {
-                Text("In Act mode the assistant can control the browser. With this on, you approve closing tabs, deleting bookmarks, changing settings and submitting forms. Whatever you choose, it never types passwords, card numbers or codes, and page text can't give it orders.")
+                Text("In Act mode the assistant can control the browser. In private mode it works in a separate private tab and can't see your other tabs, bookmarks, history, notes, saved logins or “About me”. With ask-before on, you approve closing tabs, deleting bookmarks, changing settings and submitting forms. Whatever you choose, it never types passwords, card numbers or codes, and page text can't give it orders.")
             }
 
             Section {

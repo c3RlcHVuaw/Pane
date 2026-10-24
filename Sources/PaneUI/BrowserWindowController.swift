@@ -85,6 +85,28 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     var agentTabNumbers: [UUID: Int] = [:]
     var agentBookmarkNumbers: [Int: UUID] = [:]
     var agentWatchNumbers: [Int: UUID] = [:]
+    /// In private-agent mode: the one tab the agent works in (a private context, kept out of history and saved sessions).
+    var agentPrivateTabID: UUID?
+    private let agentPrivateProfile = BrowserProfile(.privateSession)
+    var agentIsolated: Bool { settings.agentPrivate }
+
+    /// Makes sure the agent's private tab exists and is the one on screen.
+    func prepareAgentPrivateTab() {
+        if let id = agentPrivateTabID, store.tab(id) != nil {
+            if store.activeTabID != id { store.activate(id) }
+            return
+        }
+        agentPrivateTabID = store.addTab(url: "about:blank", activate: true)
+        showActive()
+    }
+
+    func closeAgentPrivateTab() {
+        guard let id = agentPrivateTabID else { return }
+        agentPrivateTabID = nil
+        destroyLive(id)
+        store.close(id)
+        if store.tabs.isEmpty { store.addTab(url: settings.newTabURL) }
+    }
     /// Pages the user asked to be told about (checked in the background every half hour).
     lazy var watches: WatchStore = {
         let s = WatchStore(directory: storage?.directory)
@@ -183,7 +205,11 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         window.delegate = self
         agent = AgentSession(toolbox: self, providerFactory: agentProviderFactory)
         agent.confirmImportantActions = settings.agentConfirm
-        agent.userDetails = { [weak self] in self?.settings.aboutMe ?? "" }
+        agent.userDetails = { [weak self] in (self?.settings.agentPrivate ?? false) ? "" : (self?.settings.aboutMe ?? "") }
+        agent.extraInstructions = { [weak self] in
+            (self?.settings.agentPrivate ?? false) ? "\n\nPRIVATE MODE: you work in one private tab. You can't see the user's other tabs, bookmarks, history, notes, saved logins or settings, and you can't change them. Use only the page tools; navigate always opens in your private tab." : ""
+        }
+        agent.onCleared = { [weak self] in self?.closeAgentPrivateTab() }
         let d = UserDefaults.standard
         if d.object(forKey: Defaults.width) != nil { expandedWidth = min(max(CGFloat(d.double(forKey: Defaults.width)), 190), 380) }
         sidebarCollapsed = d.bool(forKey: Defaults.collapsed)
@@ -255,6 +281,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         case "blockAds": engine.setContentBlocking(settings.blockAds)
         case "sidebarTint": updateSidebarTint()
         case "theme": applyTheme()
+        case "agentPrivate": assistantModel?.agentPrivate = settings.agentPrivate; if !settings.agentPrivate { closeAgentPrivateTab() }
         default: break
         }
     }
@@ -373,6 +400,8 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         bookmarkThisPage(nil)
         try? await Task.sleep(nanoseconds: 700_000_000)
         out.append("star pulse ran, bookmarked=\(bookmarks.isBookmarked("http://127.0.0.1:8765/ads.html"))")
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out.append("history snippet: \(history.entries.first { $0.url.contains("ads.html") }?.snippet ?? "none")")
         // Sidebar tint colour from an icon.
         let img = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { r in NSColor.systemOrange.setFill(); r.fill(); return true }
         out.append("dominant colour of an orange icon: \(DominantColor.of(img).map { "h=\(Int($0.hueComponent * 360)) s=\(String(format: "%.2f", $0.saturationComponent))" } ?? "none")")
@@ -394,7 +423,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         let urls = ["http://127.0.0.1:8765/form.html", "http://127.0.0.1:8765/ads.html", "https://en.wikipedia.org/wiki/Web_browser", "http://127.0.0.1:8765/login.html"]
         for i in 0..<pages { store.addTab(url: urls[i % urls.count], activate: true); showActive(); try? await Task.sleep(nanoseconds: 300_000_000) }
         try? await Task.sleep(nanoseconds: 4_000_000_000)
-        try? "\(Date().timeIntervalSince1970)".write(toFile: "/tmp/ru/quit-start.txt", atomically: true, encoding: .utf8)
+        try? "\(Date().timeIntervalSince1970)".write(toFile: ProcessInfo.processInfo.environment["PANE_DEBUG_QUIT_FILE"] ?? NSTemporaryDirectory() + "pane-quit-start.txt", atomically: true, encoding: .utf8)
         NSApp.terminate(nil)
     }
 
@@ -443,6 +472,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         lines.append("startHost: \(fit(startHost))")
         lines.append("sidebar: \(fit(sidebar))")
         lines.append("assistant host width constraint=\(assistantWidth.constant)")
+        lines.append("tabs: " + store.tabs.map { "\($0.id == agentPrivateTabID ? "[agent] " : "")\($0.url.isEmpty ? "(start page)" : $0.url)" }.joined(separator: " | "))
         func scan(_ v: NSView, _ depth: Int) {
             if v.fittingSize.width > 1500 || v.intrinsicContentSize.width > 1500 { lines.append(String(repeating: " ", count: depth) + "WIDE \(type(of: v)) fit=\(Int(v.fittingSize.width)) intrinsic=\(Int(v.intrinsicContentSize.width)) hidden=\(v.isHidden)") }
             v.subviews.forEach { scan($0, depth + 1) }
@@ -573,7 +603,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         guard storage != nil, id != workspaces.activeID, workspaces.workspaces.contains(where: { $0.id == id }) else { return }
         // Keep what the old workspace had, then swap the whole tab set.
         saveWork?.cancel()
-        if let u = sessionURL { try? store.save(to: u) }
+        if let u = sessionURL { try? store.save(to: u, excluding: agentPrivateTabID) }
         agent.stop()
         if findBar != nil { closeFind() }
         live.keys.forEach { destroyLive($0) }
@@ -605,7 +635,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private func scheduleSave() {
         saveWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { guard let self, let s = self.storage else { return }; _ = s; if let u = self.sessionURL { try? self.store.save(to: u) } }
+            MainActor.assumeIsolated { guard let self, let s = self.storage else { return }; _ = s; if let u = self.sessionURL { try? self.store.save(to: u, excluding: self.agentPrivateTabID) } }
         }
         saveWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
@@ -633,7 +663,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         }
     }
 
-    public func windowDidResize(_ notification: Notification) { scheduleWindowFixups() }
+    public func windowDidResize(_ notification: Notification) {
+        if assistantOpen, abs(assistantWidth.constant - assistantTargetWidth) > 1 { assistantWidth.constant = assistantTargetWidth }
+        scheduleWindowFixups()
+    }
 
     private var fixupsScheduled = false
     /// Moving the titlebar or the window from inside a layout pass makes AppKit re-lay the window out again and again
@@ -696,7 +729,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         guard let s = storage else { return }  // a private window leaves nothing behind
         try? downloads.save(to: s.downloads)
         _ = s
-        if let u = sessionURL { try? store.save(to: u) }
+        if let u = sessionURL { try? store.save(to: u, excluding: agentPrivateTabID) }
         try? bookmarks.save(to: s.bookmarks)
         try? history.save(to: s.history)
     }
@@ -954,8 +987,13 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         // Assistant panel: a floating glass card on the right that pushes the page over when it opens.
         assistantModel = AssistantPanelModel(session: assistantSession, agent: agent)
         assistantModel.macros = MacroStore(directory: storage?.directory)
+        assistantModel.history = AgentHistoryStore(directory: storage?.directory)
+        assistantModel.onRestore = { [weak self] run in self?.agent.restore(run) }
+        agent.onRunFinished = { [weak self] run in self?.assistantModel.history.upsert(run) }
         assistantModel.autoApprove = !settings.agentConfirm
         assistantModel.onAutoApproveChanged = { [weak self] on in self?.settings.agentConfirm = !on }
+        assistantModel.agentPrivate = settings.agentPrivate
+        assistantModel.onAgentPrivateChanged = { [weak self] on in self?.settings.agentPrivate = on }
         assistantModel.onSaveMacro = { [weak self] prompt in self?.saveMacro(prompt) }
         assistantModel.onSend = { [weak self] q in
             guard let self else { return }
@@ -1190,6 +1228,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     @objc public func stopAgent(_ sender: Any?) { agent.stop() }
 
+    /// The panel takes a third of a wide window and never less than 320 pt, so it stays readable on small windows
+    /// without squeezing the page on big ones.
+    private var assistantTargetWidth: CGFloat { min(max((window?.frame.width ?? 1280) * 0.30, 330), 460) }
+
     @objc public func toggleAssistant(_ sender: Any?) {
         assistantOpen.toggle()
         if assistantOpen { refreshAssistantModel() }
@@ -1197,7 +1239,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.01 : 0.32
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
             ctx.allowsImplicitAnimation = true
-            assistantWidth.animator().constant = assistantOpen ? 388 : 0
+            assistantWidth.animator().constant = assistantOpen ? assistantTargetWidth : 0
         }
         assistantButton.contentTintColor = assistantOpen ? .controlAccentColor : nil
         if assistantOpen {
@@ -1283,6 +1325,59 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                                         accessibilityDescription: tr("Downloads"))
         downloadsButton.contentTintColor = active ? .controlAccentColor : nil
         if !hadItems && !downloadsButton.isHidden, let host = (downloadsButton as? ToolbarButton)?.host { host.alphaValue = 0; host.animator().alphaValue = 1 }
+    }
+
+    // MARK: Page notes
+
+    public lazy var notes = NoteStore(directory: kind.isPrivate ? nil : storage?.directory)
+    private var notePopover: NSPopover?
+
+    /// Opens the note card for the current page (⌥⌘N).
+    @objc public func addNote(_ s: Any?) {
+        guard notes.isPersistent, let id = store.activeTabID, let t = store.tab(id), t.url.hasPrefix("http") else { NSSound.beep(); return }
+        if let p = notePopover, p.isShown { p.performClose(nil); return }
+        let host = URL(string: t.url)?.host ?? t.url
+        let pop = NSPopover()
+        pop.behavior = .transient
+        let host_ = NSHostingController(rootView: NoteEditorView(host: host, text: notes.note(forURL: t.url)?.text ?? "",
+                                                                 onChange: { [weak self] text in self?.notes.set(url: t.url, title: t.displayTitle, text: text) },
+                                                                 onClose: { [weak pop] in pop?.performClose(nil) }))
+        host_.sizingOptions = [.preferredContentSize]
+        pop.contentViewController = host_
+        notePopover = pop
+        pop.show(relativeTo: addressField.bounds, of: addressField, preferredEdge: .maxY)
+    }
+
+    /// When a page with a note finishes loading, show the note.
+    private func showNoteIfAny(_ id: UUID) {
+        guard notes.isPersistent, id == store.activeTabID, let t = store.tab(id), let n = notes.note(forURL: t.url) else { return }
+        ToastView.show(in: webHost, message: "📝 " + String(n.text.prefix(120)), symbol: "note.text", actionTitle: "Edit", duration: 8) { [weak self] in self?.addNote(nil) }
+    }
+
+    // MARK: Remembering pages
+
+    /// Keeps a short piece of each page's text next to its history entry, so you can find "that article about…" by what it says.
+    private func rememberPageText(_ id: UUID) {
+        guard !isPrivate, storage != nil, settings.rememberPageText, let l = live[id], let url = store.tab(id)?.url,
+              url.hasPrefix("http"), pdfOverlays[id] == nil else { return }
+        let js = """
+        (() => {
+          if (document.querySelector('input[type=password]')) return '';
+          const meta = (document.querySelector('meta[name=description], meta[property="og:description"]') || {}).content || '';
+          const h = Array.from(document.querySelectorAll('h1, h2')).slice(0, 3).map(e => e.innerText.trim()).join(' · ');
+          const root = document.querySelector('article, main') || document.body;
+          const body = Array.from(root.querySelectorAll('p')).map(p => p.innerText.trim()).filter(t => t.length > 40).slice(0, 4).join(' ');
+          return (meta + ' ' + h + ' ' + body).replace(/\\s+/g, ' ').trim().slice(0, 400);
+        })()
+        """
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)  // let the page finish drawing
+            let params = try? JSONSerialization.data(withJSONObject: ["expression": js, "returnByValue": true])
+            guard let self, let raw = try? await l.tab.devTools("Runtime.evaluate", params: params.flatMap { String(data: $0, encoding: .utf8) }),
+                  let d = raw.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+                  let text = (o["result"] as? [String: Any])?["value"] as? String, !text.isEmpty else { return }
+            self.history.updateSnippet(url: url, snippet: text)
+        }
     }
 
     // MARK: PDF viewer
@@ -1585,8 +1680,9 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             n.children.forEach(walk)
         }
         bookmarks.roots.forEach(walk)
+        out += notes.notes.map { SearchItem(id: "note:\($0.id)", kind: .note, title: String($0.text.prefix(80)), url: $0.url, lastUsed: $0.updated, detail: $0.title) }
         out += history.entries.prefix(2000).map {
-            SearchItem(id: "hist:\($0.url)", kind: .history, title: $0.title, url: $0.url, lastUsed: $0.lastVisit, visits: $0.visits)
+            SearchItem(id: "hist:\($0.url)", kind: .history, title: $0.title, url: $0.url, lastUsed: $0.lastVisit, visits: $0.visits, detail: $0.snippet ?? "")
         }
         return out
     }
@@ -1595,7 +1691,9 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         closePalette()
         switch choice {
         case .item(let item):
-            if item.kind == .tab, let id = item.tabID, !newTab { activate(id) } else { open(item.url, newTab: newTab) }
+            if item.kind == .tab, let id = item.tabID, !newTab { activate(id) }
+            else if item.kind == .note, !newTab, let t = store.tabs.first(where: { normalizedURL($0.url) == normalizedURL(item.url) }) { activate(t.id) }
+            else { open(item.url, newTab: newTab) }
         case .web(let q):
             if let url = AddressInput.resolve(q, engine: settings.searchEngine) { open(url, newTab: newTab) }
         }
@@ -1809,7 +1907,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             container.bottomAnchor.constraint(equalTo: webHost.bottomAnchor),
         ])
         webHost.layoutSubtreeIfNeeded()
-        let tab = engine.makeTab(url: item.url.isEmpty ? settings.newTabURL : item.url, in: container, profile: profile)
+        let tab = engine.makeTab(url: item.url.isEmpty ? settings.newTabURL : item.url, in: container, profile: id == agentPrivateTabID ? agentPrivateProfile : profile)
         tab.delegate = self
         tabIDs[ObjectIdentifier(tab as AnyObject)] = id
         live[id] = Live(tab: tab, container: container, leading: lead, trailing: trail, halfLeading: halfLead, halfTrailing: halfTrail)
@@ -2206,9 +2304,9 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         navState[id] = state
         if id == store.activeTabID { applyNav(state) }
         if wasLoading != state.isLoading { sidebar.refreshTab(id) }
-        if wasLoading, !state.isLoading, !isPrivate, let t = store.tab(id) { history.record(url: t.url, title: t.title) }
+        if wasLoading, !state.isLoading, !isPrivate, id != agentPrivateTabID, let t = store.tab(id) { history.record(url: t.url, title: t.title) }
         if state.isLoading { pdfOverlays.removeValue(forKey: id)?.removeFromSuperview() }
-        if wasLoading, !state.isLoading { offeredFill.remove(id); passwordsAfterLoad(id); showPDFIfNeeded(id) }
+        if wasLoading, !state.isLoading { offeredFill.remove(id); if id != agentPrivateTabID { passwordsAfterLoad(id); rememberPageText(id); showNoteIfAny(id) }; showPDFIfNeeded(id) }
     }
 
     public func tab(_ tab: BrowserTab, didChangeFavicon image: NSImage) {

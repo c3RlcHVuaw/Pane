@@ -180,8 +180,10 @@ public final class TabStore {
         var tabs: [TabItem]; var groups: [TabGroup]; var activeTabID: UUID?
     }
 
-    public func save(to url: URL) throws {
-        let data = try JSONEncoder().encode(Snapshot(tabs: tabs, groups: groups, activeTabID: activeTabID))
+    public func save(to url: URL, excluding: UUID? = nil) throws {
+        let kept = tabs.filter { $0.id != excluding }
+        let active = activeTabID.flatMap { id in kept.contains { $0.id == id } ? id : nil } ?? kept.first?.id
+        let data = try JSONEncoder().encode(Snapshot(tabs: kept, groups: groups, activeTabID: active))
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
     }

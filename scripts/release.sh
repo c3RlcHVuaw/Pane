@@ -12,6 +12,7 @@ echo "$BUILD" > BUILD_NUMBER
 # Release builds go to build/release so a Pane you are running from build/ is left alone (it updates itself).
 export PANE_APP_OUT="$PWD/build/release/Pane.app"
 ./scripts/build.sh release
+if [ "${SMOKE:-1}" = "1" ]; then ./scripts/smoke_test.sh "$PANE_APP_OUT" || { echo "Smoke test failed — not publishing. (SMOKE=0 to skip)"; exit 1; }; fi
 mkdir -p dist
 ZIP="Pane-$VERSION-$BUILD.zip"
 rm -f "dist/$ZIP"

@@ -367,8 +367,9 @@ struct PrivacyPane: View {
         Form {
             Section {
                 Toggle("Block ads and trackers", isOn: $settings.blockAds)
+                Toggle("Remember a short snippet of each page for search", isOn: $settings.rememberPageText)
             } header: { Text("Content") } footer: {
-                Text("Pane refuses requests to well-known ad and tracking servers. Pages load faster and follow you less. If a site misbehaves, turn this off and reload.")
+                Text("Pane refuses requests to well-known ad and tracking servers. Pages load faster and follow you less. If a site misbehaves, turn this off and reload. The snippets let ⌘K and the assistant find a page by what it says; they stay on this Mac and are cleared with your history.")
             }
             Section {
                 Toggle("Offer to save passwords", isOn: $settings.offerToSavePasswords)

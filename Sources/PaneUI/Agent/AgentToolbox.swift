@@ -26,7 +26,12 @@ extension BrowserWindowController: AgentToolbox {
         return ToolSpec(name: name, description: desc, inputSchema: json)
     }
 
-    public var tools: [ToolSpec] {
+    /// What the agent may use. In private mode only the page tools: nothing that touches bookmarks, history, notes, settings or other tabs.
+    private static let privateTools: Set<String> = ["get_page_state", "click", "type_text", "select_option", "press_key", "scroll", "navigate", "history_navigate", "wait"]
+
+    public var tools: [ToolSpec] { agentIsolated ? allTools.filter { Self.privateTools.contains($0.name) } : allTools }
+
+    private var allTools: [ToolSpec] {
         [
             spec("get_page_state", "Look at the current tab: its URL, title, the text on it, and a numbered list of clickable or fillable elements. Call this before clicking or typing, and again after the page changes."),
             spec("click", "Click a numbered element from get_page_state.", ["ref": ("integer", "The element number")], required: ["ref"]),
@@ -57,7 +62,9 @@ extension BrowserWindowController: AgentToolbox {
                   "mode": ("string", "appears (text shows up), disappears (text goes away), changes (any change), below or above (a price or number next to the words in text goes under or over threshold)"), "threshold": ("number", "For below/above: the number to compare with"), "title": ("string", "Short name for the notification")], required: ["mode"]),
             spec("list_watches", "List the pages being watched, with numbers."),
             spec("remove_watch", "Stop watching a page.", ["watch": ("integer", "Number from list_watches")], required: ["watch"]),
-            spec("search_history", "Search the browsing history by words.", ["query": ("string", "What to look for")], required: ["query"]),
+            spec("search_history", "Search the browsing history by words (titles, addresses and a short snippet of each page's text). Results show when each page was visited.", ["query": ("string", "What to look for"), "days_ago_min": ("integer", "Only pages visited at least this many days ago (0 = today)"), "days_ago_max": ("integer", "Only pages visited at most this many days ago")], required: ["query"]),
+            spec("add_note", "Pin a note to the current page (or a given address). The user sees it when they open that page and can find it with ⌘K.", ["text": ("string", "The note"), "url": ("string", "Optional address; default is the current tab")], required: ["text"]),
+            spec("search_notes", "Find the user's page notes by words (empty query lists them all).", ["query": ("string", "What to look for")]),
             spec("get_settings", "Show the settings you are allowed to change and their current values."),
             spec("set_setting", "Change one browser setting. Use get_settings for the names and allowed values.", ["name": ("string", "Setting name"), "value": ("string", "New value")], required: ["name", "value"]),
         ]
@@ -133,6 +140,8 @@ extension BrowserWindowController: AgentToolbox {
         case "watch_page": return ToolDescription(title: tr("Setting up a page watch"), symbol: "eye")
         case "list_watches": return ToolDescription(title: tr("Looking at your page watches"), symbol: "eye")
         case "remove_watch": return ToolDescription(title: tr("Stopping a page watch"), symbol: "eye.slash")
+        case "add_note": return ToolDescription(title: tr("Adding a note"), symbol: "note.text")
+        case "search_notes": return ToolDescription(title: tr("Looking through your notes"), symbol: "note.text")
         case "get_settings": return ToolDescription(title: tr("Checking settings"), symbol: "gearshape")
         case "set_setting":
             let setting = tr((a["name"] as? String ?? "").replacingOccurrences(of: "_", with: " ")), value = short(a["value"] as? String ?? "", 20)
@@ -144,6 +153,7 @@ extension BrowserWindowController: AgentToolbox {
     // MARK: Lifecycle (the glow and the Stop pill)
 
     public func agentWillBegin() {
+        if agentIsolated { prepareAgentPrivateTab() }
         agentOverlay.setActive(true)
         agentPill.setStatus(tr("Agent is working"))
         agentPill.show(true)
@@ -158,6 +168,7 @@ extension BrowserWindowController: AgentToolbox {
 
     public func run(_ name: String, input: String) async -> ToolResult {
         let a = args(input)
+        if agentIsolated, !Self.privateTools.contains(name) { return ToolResult("In private mode that isn't available.", isError: true) }
         do {
             let text: String
             switch name {
@@ -183,9 +194,11 @@ extension BrowserWindowController: AgentToolbox {
             case "rename_bookmark": text = try renameBookmark(int(a["bookmark"]), title: a["title"] as? String ?? "")
             case "remove_bookmark": text = try removeBookmark(int(a["bookmark"]))
             case "watch_page": text = try await watchPage(url: a["url"] as? String, text: a["text"] as? String ?? "", mode: a["mode"] as? String ?? "", title: a["title"] as? String, threshold: a["threshold"] as? Double)
+            case "add_note": text = try addNoteTool(text: a["text"] as? String ?? "", url: a["url"] as? String)
+            case "search_notes": text = searchNotes(a["query"] as? String ?? "")
             case "list_watches": text = listWatches()
             case "remove_watch": text = try removeWatch(int(a["watch"]))
-            case "search_history": text = searchHistory(a["query"] as? String ?? "")
+            case "search_history": text = searchHistory(a["query"] as? String ?? "", from: int(a["days_ago_min"]), to: int(a["days_ago_max"]))
             case "get_settings": text = settingsSummary()
             case "set_setting": text = try setSetting(a["name"] as? String ?? "", a["value"] as? String ?? "")
             default: return ToolResult("There is no tool called \(name).", isError: true)
@@ -218,6 +231,7 @@ extension BrowserWindowController: AgentToolbox {
     }
 
     private func requireLive() throws -> (id: UUID, tab: BrowserTab) {
+        if agentIsolated { prepareAgentPrivateTab() }  // the user switched tabs mid-task: come back to the private one
         guard let id = store.activeTabID else { throw PageError("There is no open tab.") }
         guard let l = live[id] else { throw PageError("This tab shows Pane's start page, which has nothing to read. Use navigate to open a site first.") }
         return (id, l.tab)
@@ -383,7 +397,7 @@ extension BrowserWindowController: AgentToolbox {
 
     private func navigateTool(_ raw: String, newTab: Bool) async throws -> String {
         guard let url = normalized(raw) else { throw PageError("Only http and https addresses can be opened.") }
-        if newTab || store.activeTabID == nil {
+        if (newTab && !agentIsolated) || store.activeTabID == nil {
             store.addTab(url: url, groupID: store.activeTabID.flatMap { store.tab($0)?.groupID })
             showActive()
         } else {
@@ -570,6 +584,21 @@ extension BrowserWindowController: AgentToolbox {
         return "Stopped watching."
     }
 
+    private func addNoteTool(text: String, url: String?) throws -> String {
+        guard notes.isPersistent else { throw PageError("Notes aren't available in a private window.") }
+        let current = store.activeTabID.flatMap { store.tab($0) }
+        guard let u = (url.flatMap { normalized($0) }) ?? current.map({ $0.url }), u.hasPrefix("http") else { throw PageError("There is no page to attach a note to.") }
+        let existing = notes.note(forURL: u)?.text
+        notes.set(url: u, title: u == current?.url ? (current?.displayTitle ?? hostOf(u)) : hostOf(u), text: existing.map { $0 + "\n" + text } ?? text)
+        return "Note saved for \(hostOf(u))."
+    }
+
+    private func searchNotes(_ q: String) -> String {
+        let all = notes.notes
+        let hits = q.trimmingCharacters(in: .whitespaces).isEmpty ? all : all.filter { ($0.text + " " + $0.title + " " + $0.url).localizedCaseInsensitiveContains(q) }
+        return hits.isEmpty ? "No notes match." : hits.prefix(15).map { "“\($0.text.prefix(120))” — \($0.title) \($0.url)" }.joined(separator: "\n")
+    }
+
     private func removeBookmark(_ n: Int?) throws -> String {
         if isPrivate { throw PageError("Bookmarks can't be changed in a private window.") }
         guard let n, let id = agentBookmarkNumbers[n], let node = bookmarks.node(id) else { throw PageError("There is no bookmark with that number. Call list_bookmarks.") }
@@ -577,9 +606,20 @@ extension BrowserWindowController: AgentToolbox {
         return "Deleted “\(node.displayTitle)”."
     }
 
-    private func searchHistory(_ q: String) -> String {
-        let hits = search.keywordSearch(q, in: searchItems().filter { $0.kind == .history }, limit: 10)
-        return hits.isEmpty ? "Nothing in the history matches." : hits.map { "“\($0.item.title)” — \($0.item.url)" }.joined(separator: "\n")
+    private func searchHistory(_ q: String, from: Int?, to: Int?) -> String {
+        let now = Date(), cal = Calendar.current
+        func daysAgo(_ d: Date) -> Int { cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: now)).day ?? 0 }
+        let items = searchItems().filter { $0.kind == .history }.filter { item in
+            guard let d = item.lastUsed else { return true }
+            let n = daysAgo(d)
+            return (from.map { n >= $0 } ?? true) && (to.map { n <= $0 } ?? true)
+        }
+        let hits = search.keywordSearch(q, in: items, limit: 10)
+        let f = DateFormatter(); f.dateFormat = "EEEE d MMM"; f.locale = Locale(identifier: "en_US")
+        return hits.isEmpty ? "Nothing in the history matches." : hits.map { h in
+            let when = h.item.lastUsed.map { " (\(f.string(from: $0)), \(daysAgo($0)) days ago)" } ?? ""
+            return "“\(h.item.title)” — \(h.item.url)\(when)"
+        }.joined(separator: "\n")
     }
 
     private static let settingsHelp = """

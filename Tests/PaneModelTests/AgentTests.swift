@@ -124,13 +124,23 @@ final class AgentTests: XCTestCase {
 
     func testStepLimit() async {
         let box = FakeToolbox()
-        let turn: [AgentEvent] = [.toolCall(id: "x", name: "click", input: "{}")]
-        let p = ScriptedProvider(Array(repeating: turn, count: 60))
+        let p = ScriptedProvider((0..<60).map { [AgentEvent.toolCall(id: "x\($0)", name: "click", input: "{\"ref\": \($0)}")] })
         let s = AgentSession(toolbox: box) { p }
         s.send("Loop forever")
         await wait(s)
         XCTAssertEqual(box.ran.count, AgentSession.maxSteps)
         XCTAssertTrue(s.items.contains { if case .notice(_, let t, _) = $0 { return t.contains("30 steps") }; return false })
+    }
+
+    func testRepeatingTheSameCallStopsTheLoop() async {
+        let box = FakeToolbox()
+        let turn: [AgentEvent] = [.toolCall(id: "x", name: "click", input: "{}")]
+        let p = ScriptedProvider(Array(repeating: turn, count: 60))
+        let s = AgentSession(toolbox: box) { p }
+        s.send("Loop forever")
+        await wait(s)
+        XCTAssertLessThan(box.ran.count, 8, "identical calls in a row are cut off")
+        XCTAssertTrue(s.items.contains { if case .notice = $0 { return true }; return false })
     }
 
     func testOldPageSnapshotsArePruned() {
