@@ -33,6 +33,10 @@ run stress 60 PANE_DEBUG_STRESS_ALL=3
 grep -q survived "$OUT/stress-stress.txt" 2>/dev/null && pass "survived 3 rounds" || fail "stress run did not finish"
 grep -q "tabs=1 live=1" "$OUT/stress-stress.txt" 2>/dev/null && pass "no leaked pages" || fail "pages leaked"
 
+echo "Sidebar stress: random moves, groups, pins, sleeps, closes"
+run sidebar 60 PANE_DEBUG_SIDEBAR=250
+grep -q "sidebar survived" "$OUT/sidebar-sidebar.txt" 2>/dev/null && pass "sidebar survived 250 random operations" || fail "sidebar stress did not finish"
+
 echo "Features"
 run features 30 PANE_DEBUG_FEATURES=1
 F="$OUT/features-features.txt"

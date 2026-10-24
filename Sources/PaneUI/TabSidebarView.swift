@@ -12,6 +12,9 @@ protocol TabCommands: AnyObject {
     func copyLink(_ id: UUID)
     func toggleMute(_ id: UUID)
     func openURL(_ url: String, inGroup: UUID?)
+    var canReopenClosed: Bool { get }
+    func reopenClosed()
+    func sleepInactive()
 }
 
 final class SidebarNode: NSObject {
@@ -39,6 +42,9 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     private var animatingUntil = Date.distantPast
     private var reloadPending = false
     private var knownTabs: Set<UUID> = []
+    private var shownRoot: [SidebarNode] = []
+    private var shownKids: [ObjectIdentifier: [SidebarNode]] = [:]
+    private let selectionPill = SelectionPill()
 
     /// Set when the window supports workspaces (not private windows).
     var workspaces: WorkspaceStore? { didSet { refreshWorkspace() } }
@@ -74,6 +80,8 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         outline.draggingDestinationFeedbackStyle = .gap
         outline.setAccessibilityLabel(tr("Tabs"))
         outline.menuProvider = { [weak self] row in self?.menu(forRow: row) }
+        outline.backgroundMenuProvider = { [weak self] in self?.backgroundMenu() }
+        outline.addSubview(selectionPill, positioned: .below, relativeTo: nil)
 
         let scroll = NSScrollView()
         scroll.documentView = outline
@@ -87,6 +95,7 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         pinned.onSelect = { [weak self] id in self?.commands?.activate(id) }
         pinned.onDrop = { [weak self] id, before in self?.store.pin(id, before: before) }
         pinned.menuProvider = { [weak self] id in self?.tabMenu(for: id) }
+        pinned.backgroundMenuProvider = { [weak self] in self?.backgroundMenu() }
 
         let newTab = PillButton(title: { let t = tr("New Tab·short"); return t.hasSuffix("·short") ? tr("New Tab") : t }(), symbol: "plus", target: self, action: #selector(newTabClicked))
         newTab.toolTip = ShortcutCatalog.hint("New Tab", "New Tab")
@@ -144,39 +153,101 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     func outlineViewItemWillExpand(_ n: Notification) { animatingUntil = Date().addingTimeInterval(0.45) }
     func outlineViewItemWillCollapse(_ n: Notification) { animatingUntil = Date().addingTimeInterval(0.45) }
 
+    private func structure() -> (root: [SidebarNode], kids: [ObjectIdentifier: [SidebarNode]]) {
+        let root = children(of: nil)
+        var kids: [ObjectIdentifier: [SidebarNode]] = [:]
+        for n in root { if case .tab = n.kind { continue }; kids[ObjectIdentifier(n)] = children(of: n) }
+        return (root, kids)
+    }
+
     private func performReload() {
         syncing = true
         defer { syncing = false }
         // Keep node identity stable so expansion state survives a reload.
         let liveTabs = Set(store.tabs.map(\.id)), liveGroups = Set(store.groups.map(\.id))
+        let oldStructure = (root: shownRoot, kids: shownKids)
         tabNodes = tabNodes.filter { liveTabs.contains($0.key) }
         groupNodes = groupNodes.filter { liveGroups.contains($0.key) }
         for t in store.tabs where tabNodes[t.id] == nil { tabNodes[t.id] = SidebarNode(.tab(t.id)) }
         for g in store.groups where groupNodes[g.id] == nil { groupNodes[g.id] = SidebarNode(.group(g.id)) }
 
         pinned.setEntries(pinnedEntries())
-        outline.reloadData()
+
+        // A tab that changes parent is removed from one place and inserted in another; give it a fresh
+        // identity so the outline never sees one item both leave and arrive in the same batch.
+        func parentKey(_ n: SidebarNode, _ root: [SidebarNode], _ kids: [ObjectIdentifier: [SidebarNode]]) -> ObjectIdentifier? {
+            if root.contains(where: { $0 === n }) { return nil }
+            return kids.first { $0.value.contains { $0 === n } }?.key
+        }
+        var newStructure = structure()
+        var canDiff = !oldStructure.root.isEmpty && outline.numberOfRows > 0 && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        var changes = 0
+        if canDiff {
+            for t in store.tabs {
+                guard let n = tabNodes[t.id] else { continue }
+                let was = oldStructure.root.contains { $0 === n } || oldStructure.kids.values.contains { $0.contains { $0 === n } }
+                guard was else { continue }
+                let before = parentKey(n, oldStructure.root, oldStructure.kids)
+                let after = parentKey(n, newStructure.root, newStructure.kids)
+                if before != after { tabNodes[t.id] = SidebarNode(.tab(t.id)); newStructure = structure() }
+            }
+            changes = newStructure.root.difference(from: oldStructure.root).count
+            for (k, v) in newStructure.kids { changes += v.difference(from: oldStructure.kids[k] ?? []).count }
+            if changes > 14 { canDiff = false }
+        }
+
+        if canDiff {
+            let anim: NSTableView.AnimationOptions = [.effectFade, .slideDown]
+            let animOut: NSTableView.AnimationOptions = [.effectFade, .slideUp]
+            outline.beginUpdates()
+            let rootDiff = newStructure.root.difference(from: oldStructure.root)
+            var rem = IndexSet(), ins = IndexSet()
+            for c in rootDiff { switch c { case .remove(let o, _, _): rem.insert(o); case .insert(let o, _, _): ins.insert(o) } }
+            // Children first (their parents must still be the old items), then the top level.
+            var reloadParents: [SidebarNode] = []
+            for parent in newStructure.root where oldStructure.root.contains(where: { $0 === parent }) {
+                guard let pk = Optional(ObjectIdentifier(parent)), case let new = newStructure.kids[pk] ?? [], case let old = oldStructure.kids[pk] ?? [] else { continue }
+                let d = new.difference(from: old)
+                if d.isEmpty { continue }
+                if !outline.isItemExpanded(parent) { reloadParents.append(parent); continue }
+                var r = IndexSet(), i = IndexSet()
+                for c in d { switch c { case .remove(let o, _, _): r.insert(o); case .insert(let o, _, _): i.insert(o) } }
+                if !r.isEmpty { outline.removeItems(at: r, inParent: parent, withAnimation: animOut) }
+                if !i.isEmpty { outline.insertItems(at: i, inParent: parent, withAnimation: anim) }
+            }
+            if !rem.isEmpty { outline.removeItems(at: rem, inParent: nil, withAnimation: animOut) }
+            if !ins.isEmpty { outline.insertItems(at: ins, inParent: nil, withAnimation: anim) }
+            outline.endUpdates()
+            for p in reloadParents { outline.reloadItem(p, reloadChildren: true) }
+            animatingUntil = Date().addingTimeInterval(0.3)
+        } else {
+            outline.reloadData()
+        }
+        shownRoot = newStructure.root
+        shownKids = newStructure.kids
+
         for g in store.groups {
             if let n = groupNodes[g.id] { if g.isCollapsed == outline.isItemExpanded(n) { g.isCollapsed ? outline.collapseItem(n) : outline.expandItem(n) } }
         }
         if sleepingExpanded != outline.isItemExpanded(sleepingNode) { sleepingExpanded ? outline.expandItem(sleepingNode) : outline.collapseItem(sleepingNode) }
+        refreshVisibleCells()
         selectActive()
 
-        // New tabs ease in instead of popping into the list.
-        let now = Set(store.tabs.map(\.id))
-        let fresh = knownTabs.isEmpty ? [] : now.subtracting(knownTabs)
-        knownTabs = now
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            for id in fresh {
-                guard let node = tabNodes[id] else { continue }
-                let row = outline.row(forItem: node)
-                guard row >= 0, let view = outline.view(atColumn: 0, row: row, makeIfNecessary: false) else { continue }
-                view.alphaValue = 0
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.28
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
-                    view.animator().alphaValue = 1
-                }
+        knownTabs = Set(store.tabs.map(\.id))
+    }
+
+    /// Re-applies the model to every row that is on screen (titles, counts, icons).
+    private func refreshVisibleCells() {
+        let rows = outline.rows(in: outline.visibleRect)
+        for r in rows.location..<(rows.location + rows.length) {
+            guard let node = outline.item(atRow: r) as? SidebarNode, let cell = outline.view(atColumn: 0, row: r, makeIfNecessary: false) else { continue }
+            switch node.kind {
+            case .tab(let id):
+                if let t = store.tab(id), let c = cell as? TabCellView { c.configure(t, icon: favicon(id), dimmed: t.isSleeping, active: id == store.activeTabID, loading: isLoading(id), audible: isAudible(id), muted: isMuted(id)) }
+            case .group(let gid):
+                if let g = store.group(gid), let c = cell as? GroupCellView { c.configure(name: g.name, color: GroupPalette.color(g.colorIndex), count: store.tabs(in: gid).count) }
+            case .sleeping:
+                (cell as? GroupCellView)?.configure(name: tr("Sleeping"), color: nil, symbol: "moon.zzz.fill", count: store.sleeping.count)
             }
         }
     }
@@ -208,10 +279,13 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     }
 
     private func selectActive() {
-        guard let id = store.activeTabID, let n = tabNodes[id] else { outline.deselectAll(nil); return }
+        guard let id = store.activeTabID, let n = tabNodes[id] else { outline.deselectAll(nil); selectionPill.hide(); return }
         let row = outline.row(forItem: n)
-        if row >= 0 { outline.selectRowIndexes([row], byExtendingSelection: false); outline.scrollRowToVisible(row) }
-        else { outline.deselectAll(nil) }
+        if row >= 0 {
+            outline.selectRowIndexes([row], byExtendingSelection: false)
+            outline.scrollRowToVisible(row)
+            selectionPill.move(to: outline.rect(ofRow: row).insetBy(dx: 2, dy: 1))
+        } else { outline.deselectAll(nil); selectionPill.hide() }
     }
 
     // MARK: Data source
@@ -306,6 +380,47 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         return p
     }
 
+    func outlineView(_ ov: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
+        guard let node = draggedItems.first as? SidebarNode, case .tab(let id) = node.kind, let t = store.tab(id) else { return }
+        let chip = Self.dragChip(title: t.displayTitle, icon: tabIcon(favicon(id)))
+        session.draggingFormation = .none
+        session.animatesToStartingPositionsOnCancelOrFail = true
+        session.enumerateDraggingItems(options: [], for: ov, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+            let f = item.draggingFrame
+            item.draggingFrame = NSRect(x: f.minX, y: f.midY - chip.size.height / 2, width: chip.size.width, height: chip.size.height)
+            item.imageComponentsProvider = {
+                let c = NSDraggingImageComponent(key: .icon)
+                c.contents = chip
+                c.frame = NSRect(origin: .zero, size: chip.size)
+                return [c]
+            }
+        }
+    }
+
+    /// The little card that follows the pointer while a tab is dragged.
+    private static func dragChip(title: String, icon: NSImage) -> NSImage {
+        let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let text = String(title.prefix(40))
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+        let tw = min(200, (text as NSString).size(withAttributes: attrs).width)
+        let size = NSSize(width: 8 + 16 + 8 + tw + 14, height: 32)
+        let pad: CGFloat = 8
+        return NSImage(size: NSSize(width: size.width + pad * 2, height: size.height + pad * 2), flipped: false) { _ in
+            let rect = NSRect(x: pad, y: pad, width: size.width, height: size.height)
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.28); shadow.shadowBlurRadius = 10; shadow.shadowOffset = NSSize(width: 0, height: -3)
+            shadow.set()
+            let path = NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11)
+            NSColor.windowBackgroundColor.withAlphaComponent(0.96).setFill(); path.fill()
+            NSGraphicsContext.restoreGraphicsState()
+            NSColor.separatorColor.setStroke(); path.lineWidth = 0.5; path.stroke()
+            icon.draw(in: NSRect(x: rect.minX + 8, y: rect.midY - 8, width: 16, height: 16))
+            (text as NSString).draw(in: NSRect(x: rect.minX + 32, y: rect.midY - 8, width: tw + 2, height: 16), withAttributes: attrs)
+            return true
+        }
+    }
+
     private func draggedID(_ info: NSDraggingInfo) -> UUID? {
         info.draggingPasteboard.string(forType: .paneTab).flatMap(UUID.init(uuidString:))
     }
@@ -375,6 +490,43 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         case .tab(let id): return tabMenu(for: id)
         case .group(let gid): return groupMenu(for: gid)
         case .sleeping: return nil
+        }
+    }
+
+    private func duplicateTabs() -> [UUID] {
+        var seen: [String: UUID] = [:], extra: [UUID] = []
+        let ordered = store.tabs.filter { !$0.isPinned && !$0.url.isEmpty }.sorted { $0.id == store.activeTabID && $1.id != store.activeTabID }
+        for t in ordered { if seen[t.url] != nil { extra.append(t.id) } else { seen[t.url] = t.id } }
+        return extra
+    }
+
+    func backgroundMenu() -> NSMenu {
+        let m = NSMenu()
+        m.addItem(item("New Tab", #selector(newTabClicked)))
+        m.addItem(item("New Group…", #selector(newGroupClicked)))
+        let reopen = item("Reopen Closed Tab", #selector(reopenClosedTab))
+        reopen.isEnabled = commands?.canReopenClosed ?? false
+        m.addItem(reopen)
+        if !store.groups.isEmpty {
+            m.addItem(.separator())
+            let anyOpen = store.groups.contains { !$0.isCollapsed }
+            m.addItem(item(anyOpen ? "Collapse All Groups" : "Expand All Groups", #selector(toggleAllGroups(_:)), anyOpen))
+        }
+        let hasSleepable = store.tabs.contains { !$0.isPinned && !$0.isSleeping && $0.id != store.activeTabID }
+        let dups = duplicateTabs()
+        if hasSleepable || !dups.isEmpty { m.addItem(.separator()) }
+        if hasSleepable { m.addItem(item("Put Other Tabs to Sleep", #selector(sleepInactiveTabs))) }
+        if !dups.isEmpty { m.addItem(item("Close Duplicate Tabs", #selector(closeDuplicateTabs))) }
+        return m
+    }
+    @objc private func reopenClosedTab() { commands?.reopenClosed() }
+    @objc private func sleepInactiveTabs() { commands?.sleepInactive() }
+    @objc private func closeDuplicateTabs() { for id in duplicateTabs() { commands?.close(id) } }
+    @objc private func toggleAllGroups(_ s: NSMenuItem) {
+        let collapse = (s.representedObject as? Bool) ?? true
+        for g in store.groups {
+            guard let n = groupNodes[g.id], outline.isItemExpanded(n) == collapse else { continue }
+            collapse ? outline.animator().collapseItem(n) : outline.animator().expandItem(n)
         }
     }
 

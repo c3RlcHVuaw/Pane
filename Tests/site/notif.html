@@ -1,0 +1,10 @@
+<!doctype html><title>notif</title><body><script>
+window.result = {};
+(async () => {
+  result.before = Notification.permission;
+  result.asked = await Notification.requestPermission();
+  result.after = Notification.permission;
+  new Notification('Hello from a page', { body: 'It works' });
+  result.done = true;
+})();
+</script>

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 extension View {
@@ -41,14 +42,20 @@ extension View {
     }
 
     /// A tooltip that always appears (the system one doesn't inside floating panels). `anchor` says which edge the bubble lines up with.
-    func paneTooltip(_ text: LocalizedStringKey, anchor: HorizontalAlignment = .center) -> some View { modifier(PaneTooltip(text: text, anchor: anchor)) }
+    func paneTooltip(_ text: String, anchor: HorizontalAlignment = .center) -> some View { modifier(PaneTooltip(text: text, anchor: anchor)) }
 }
 
 private struct PaneTooltip: ViewModifier {
-    let text: LocalizedStringKey
+    let text: String
     let anchor: HorizontalAlignment
     @State private var shown = false
     @State private var pending: Task<Void, Never>?
+
+    /// Wide enough for the whole text on one line, but never more than 240 pt (then it wraps).
+    private static func width(of text: String) -> CGFloat {
+        let w = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width
+        return min(ceil(w) + 2, 240)
+    }
 
     func body(content: Content) -> some View {
         content
@@ -63,9 +70,9 @@ private struct PaneTooltip: ViewModifier {
             }
             .overlay(alignment: Alignment(horizontal: anchor, vertical: .bottom)) {
                 if shown {
-                    Text(text)
+                    Text(verbatim: text)
                         .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.primary)
-                        .lineLimit(3).multilineTextAlignment(.leading).frame(maxWidth: 230, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading).frame(width: Self.width(of: text), alignment: .leading).fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .paneGlass(RoundedRectangle(cornerRadius: 10, style: .continuous), interactive: false)
                         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
@@ -83,7 +90,7 @@ private struct PaneTooltip: ViewModifier {
 struct GlassIconButton: View {
     let symbol: String
     var tint: Color?
-    var help: LocalizedStringKey
+    var help: String
     var anchor: HorizontalAlignment = .center
     var action: () -> Void
     var body: some View {
@@ -92,7 +99,7 @@ struct GlassIconButton: View {
         }
         .paneIconButtonStyle(tint: tint)
         .paneTooltip(help, anchor: anchor)
-        .accessibilityLabel(help)
+        .accessibilityLabel(Text(verbatim: help))
     }
 }
 

@@ -25,6 +25,7 @@ public final class CEFEngine: BrowserEngine {
 
     public func shutdown() { PCRuntime.shutdown() }
     public func setContentBlocking(_ on: Bool) { PCRuntime.setAdBlocking(on) }
+    public func setDocumentStartScript(_ source: String) { PCRuntime.setDocumentStartScript(source) }
     public func clearCookies(for url: String, profile: BrowserProfile) async {
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             PCRuntime.clearCookies(for: url, in: profile.engineHandle as? PCContext) { c.resume() }

@@ -181,8 +181,8 @@ private struct SuggestionChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).foregroundStyle(tint).frame(width: 22, height: 22)
-                    .background { RoundedRectangle(cornerRadius: 7, style: .continuous).fill(tint.opacity(0.14)) }
+                Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).frame(width: 22, height: 22)
+                    .background { RoundedRectangle(cornerRadius: 7, style: .continuous).fill(tint.gradient) }
                 Text(verbatim: text).foregroundStyle(.primary).multilineTextAlignment(.leading).font(.system(size: 13))
                 Spacer(minLength: 0)
                 Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary).opacity(hover ? 1 : 0)

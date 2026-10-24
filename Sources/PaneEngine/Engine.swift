@@ -149,6 +149,8 @@ public protocol BrowserEngine: AnyObject {
     func shutdown()
     /// Blocks requests to known ad and tracker hosts.
     func setContentBlocking(_ on: Bool)
+    /// A script every page runs before its own scripts.
+    func setDocumentStartScript(_ source: String)
     /// Deletes cookies and cached files of a profile.
     func clearBrowsingData(for profile: BrowserProfile) async
     /// Deletes the cookies one site has set.

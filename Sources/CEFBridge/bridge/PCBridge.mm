@@ -151,6 +151,7 @@ class PCTextVisitor : public CefStringVisitor {
 // MARK: - Content blocking
 
 static std::atomic<bool> g_adBlock{true};
+static NSString *g_startScript = @"";
 
 /// Hosts that only serve ads or trackers. Subresources from these (and their subdomains) are refused.
 static bool PCIsBlockedHost(const std::string &host) {
@@ -355,7 +356,7 @@ class PCClient : public CefClient, public CefLifeSpanHandler, public CefDisplayH
   /// Pane's own page scripts talk to the app through the console; those lines are swallowed here.
   bool OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t, const CefString &message, const CefString &, int) override {
     NSString *m = NS(message);
-    if (![m hasPrefix:@"__pane:"]) return false;
+    if (![m hasPrefix:@"__pane:"] && ![m hasPrefix:@"__pane-notif:"]) return false;
     __weak PCBrowser *o = owner_;
     dispatch_async(dispatch_get_main_queue(), ^{ [o pageMessage:m]; });
     return true;
@@ -413,6 +414,7 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
   CefRefPtr<PCClient> _client;
   NSView *_view;
   BOOL _closeRequested, _created;
+  NSString *_pendingURL;
   void (^_closeCompletion)(void);
   PCBrowser *_selfRef;
 }
@@ -425,7 +427,10 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
     NSRect b = parent.bounds;
     info.SetAsChild((__bridge CefWindowHandle)parent, CefRect(0, 0, (int)b.size.width, (int)b.size.height));
     CefBrowserSettings settings;
-    CefBrowserHost::CreateBrowser(info, _client, url.UTF8String, settings, nullptr, context ? [context cefContext] : nullptr);
+    // With a start script, the page is opened only after the script is registered, so even the very first page gets it.
+    BOOL early = g_startScript.length > 0 && ([url hasPrefix:@"http"] || [url hasPrefix:@"file"]);
+    if (early) _pendingURL = url;
+    CefBrowserHost::CreateBrowser(info, _client, early ? "about:blank" : url.UTF8String, settings, nullptr, context ? [context cefContext] : nullptr);
   }
   return self;
 }
@@ -440,6 +445,17 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
   _devToolsRegistration = b->GetHost()->AddDevToolsMessageObserver(new PCDevToolsObserver(self));
   _view = (__bridge NSView *)b->GetHost()->GetWindowHandle();
   _view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  if (g_startScript.length) {
+    NSData *add = [NSJSONSerialization dataWithJSONObject:@{@"source": g_startScript} options:0 error:nil];
+    NSData *now = [NSJSONSerialization dataWithJSONObject:@{@"expression": g_startScript} options:0 error:nil];
+    __weak PCBrowser *weakSelf = self;
+    [self devToolsMethod:@"Page.enable" params:nil completion:^(NSString *, NSString *) {}];
+    [self devToolsMethod:@"Page.addScriptToEvaluateOnNewDocument" params:[[NSString alloc] initWithData:add encoding:NSUTF8StringEncoding] completion:^(NSString *, NSString *) {
+      PCBrowser *me = weakSelf;
+      if (me && me->_pendingURL && me->_browser) { NSString *u = me->_pendingURL; me->_pendingURL = nil; me->_browser->GetMainFrame()->LoadURL(u.UTF8String); }
+    }];
+    [self devToolsMethod:@"Runtime.evaluate" params:[[NSString alloc] initWithData:now encoding:NSUTF8StringEncoding] completion:^(NSString *, NSString *) {}];
+  } else if (_pendingURL) { NSString *u = _pendingURL; _pendingURL = nil; b->GetMainFrame()->LoadURL(u.UTF8String); }
   [self.delegate browserDidCreateView:_view];
 }
 - (void)didClose {
@@ -612,6 +628,7 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
 }
 
 + (void)setAdBlocking:(BOOL)on { g_adBlock.store(on); }
++ (void)setDocumentStartScript:(NSString *)source { g_startScript = [source copy] ?: @""; }
 
 + (void)clearCookiesFor:(NSString *)url in:(PCContext *)context completion:(void (^)(void))completion {
   struct Deleted : public CefDeleteCookiesCallback {

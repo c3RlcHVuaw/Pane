@@ -24,6 +24,8 @@ struct SettingsActions {
     var releaseHistory: () async -> [ReleaseEntry]
     var openPage: (String) -> Void
     var showHistory: () -> Void
+    var notificationDecisions: () -> [String: String]
+    var setNotificationDecision: (String, String?) -> Void
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable {
@@ -173,6 +175,9 @@ struct GeneralPane: View {
                     else { Button("Make Default") { actions.makeDefaultBrowser(); DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { isDefault = actions.isDefaultBrowser() } } }
                 }
             }
+            Section {
+                Toggle("Swipe between pages with the trackpad", isOn: $settings.swipeNavigation)
+            } footer: { Text("Needs “Swipe between pages” turned on in System Settings ▸ Trackpad ▸ More Gestures.") }
             Section("Startup") {
                 Picker("When Pane opens", selection: $settings.startup) {
                     ForEach(StartupBehavior.allCases) { Text($0.title).tag($0) }
@@ -398,6 +403,7 @@ struct PrivacyPane: View {
     @State private var confirm = false
     @State private var count = 0
     @State private var confirmClearData = false
+    @State private var sites: [String: String] = [:]
     @State private var clearingData = false
     @State private var clearedData = false
     var body: some View {
@@ -409,6 +415,19 @@ struct PrivacyPane: View {
             } header: { Text("Content") } footer: {
                 Text("Pane refuses requests to well-known ad and tracking servers. Pages load faster and follow you less. If a site misbehaves, turn this off and reload. With suggestions on, what you type in the address bar goes to your search engine as you type. The snippets let ⌘K and the assistant find a page by what it says; they stay on this Mac and are cleared with your history.")
             }
+            Section {
+                if sites.isEmpty { Text("No site can show notifications yet.").foregroundStyle(.secondary) }
+                ForEach(sites.keys.sorted(), id: \.self) { origin in
+                    HStack {
+                        Image(systemName: sites[origin] == "granted" ? "bell.fill" : "bell.slash").foregroundStyle(sites[origin] == "granted" ? .green : .secondary).frame(width: 22)
+                        Text(verbatim: URL(string: origin)?.host ?? origin)
+                        Spacer()
+                        Text(sites[origin] == "granted" ? "Allowed" : "Blocked").font(.caption).foregroundStyle(.secondary)
+                        Button(role: .destructive) { actions.setNotificationDecision(origin, nil); sites[origin] = nil } label: { Image(systemName: "trash") }.buttonStyle(.borderless).help("Delete")
+                    }
+                }
+            } header: { Text("Site notifications") } footer: { Text("Pages that are open in Pane can show notifications in the macOS notification centre once you allow them.") }
+            .onAppear { sites = actions.notificationDecisions() }
             Section {
                 Toggle("Offer to save passwords", isOn: $settings.offerToSavePasswords)
                 ForEach(vault.logins.sorted { $0.host < $1.host }) { l in

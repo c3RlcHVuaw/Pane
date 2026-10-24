@@ -432,6 +432,15 @@
 "Typing “%@” in “%@”" = "Ввожу «%@» в поле «%@»";
 "Unknown step" = "Неизвестный шаг";
 "Waiting" = "Жду";
+"“%@” wants to show notifications" = "«%@» хочет показывать уведомления";
+"They appear in the macOS notification centre while this page is open in Pane." = "Они появятся в центре уведомлений macOS, пока эта страница открыта в Pane.";
+"No site can show notifications yet." = "Пока ни один сайт не может показывать уведомления.";
+"Allowed" = "Разрешено";
+"Blocked" = "Заблокировано";
+"Site notifications" = "Уведомления сайтов";
+"Pages that are open in Pane can show notifications in the macOS notification centre once you allow them." = "Открытые в Pane страницы могут показывать уведомления в центре уведомлений macOS, как только вы это разрешите.";
+"Swipe between pages with the trackpad" = "Листать страницы свайпом по трекпаду";
+"Needs “Swipe between pages” turned on in System Settings ▸ Trackpad ▸ More Gestures." = "Нужно включить «Смахивание между страницами» в Системных настройках ▸ Трекпад ▸ Другие жесты.";
 "Open File…" = "Открыть файл…";
 "Save Page As…" = "Сохранить страницу как…";
 "Share Page…" = "Поделиться страницей…";
@@ -726,3 +735,7 @@
 "startup" = "запуск";
 "new tab page" = "новая вкладка";
 "automatic updates" = "автообновление";
+"Collapse All Groups" = "Свернуть все группы";
+"Expand All Groups" = "Развернуть все группы";
+"Put Other Tabs to Sleep" = "Усыпить остальные вкладки";
+"Close Duplicate Tabs" = "Закрыть дубликаты вкладок";

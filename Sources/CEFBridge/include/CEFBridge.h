@@ -98,6 +98,8 @@ NS_SWIFT_UI_ACTOR
 + (void)shutdown;
 /// Refuses sub-requests to known ad and tracker hosts. On by default.
 + (void)setAdBlocking:(BOOL)on;
+/// A script every page runs before its own scripts (also run once on the page that is already loading).
++ (void)setDocumentStartScript:(NSString *)source;
 /// Deletes the cookies a site (a full address) has set.
 + (void)clearCookiesFor:(NSString *)url in:(nullable PCContext *)context completion:(void (^)(void))completion;
 /// Deletes cookies and the cache of the default storage (and of `context` when given).

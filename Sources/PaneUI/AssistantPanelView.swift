@@ -99,7 +99,7 @@ struct AssistantPanelView: View {
             if model.agentEnabled {
                 PaneSegmented(selection: $model.mode.animation(.snappy(duration: 0.2)),
                               options: [.init(value: .ask, title: "Ask", measure: [tr("Ask"), tr("Act")]), .init(value: .act, title: "Act", measure: [])], accent: model.accent)
-                    .paneTooltip("Ask: answers questions about pages.  Act: controls the browser for you.", anchor: .leading)
+                    .paneTooltip(tr("Ask: answers questions about pages.  Act: controls the browser for you."), anchor: .leading)
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Assistant mode")
             }
@@ -117,26 +117,26 @@ struct AssistantPanelView: View {
                     Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).frame(width: 16, height: 16)
                 }
                 .menuStyle(.button).menuIndicator(.hidden).paneIconButtonStyle()
-                .paneTooltip("More", anchor: .trailing)
+                .paneTooltip(tr("More"), anchor: .trailing)
                 .popover(isPresented: $showHistory, arrowEdge: .bottom) { AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) }) }
             } else {
                 if isAct {
                     GlassIconButton(symbol: model.autoApprove ? "checkmark.shield.fill" : "checkmark.shield", tint: model.autoApprove ? .orange : nil,
-                                    help: model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.") {
+                                    help: tr(model.autoApprove ? "Auto-approve is on: the agent doesn't ask before acting (it still never types passwords). Click to turn off." : "Auto-approve is off: the agent asks before closing tabs, deleting, changing settings or submitting forms. Click to turn on.")) {
                         withAnimation(.snappy) { model.autoApprove.toggle() }
                     }
                     GlassIconButton(symbol: model.agentPrivate ? "lock.shield.fill" : "lock.shield", tint: model.agentPrivate ? .purple : nil,
-                                    help: model.agentPrivate ? "Private mode is on: the agent works in a private tab and can't see your bookmarks, history or logins. Click to turn off." : "Private mode is off. Turn on to make the agent work in a private tab that can't see your bookmarks, history or logins.") { model.agentPrivate.toggle() }
-                    GlassIconButton(symbol: "clock.arrow.circlepath", tint: showHistory ? model.accent : nil, help: "Past conversations") { showHistory.toggle() }
+                                    help: tr(model.agentPrivate ? "Private mode is on: the agent works in a private tab and can't see your bookmarks, history or logins. Click to turn off." : "Private mode is off. Turn on to make the agent work in a private tab that can't see your bookmarks, history or logins.")) { model.agentPrivate.toggle() }
+                    GlassIconButton(symbol: "clock.arrow.circlepath", tint: showHistory ? model.accent : nil, help: tr("Past conversations")) { showHistory.toggle() }
                         .popover(isPresented: $showHistory, arrowEdge: .bottom) { AgentHistoryList(history: model.history, onPick: { run in showHistory = false; model.onRestore(run) }) }
                 }
                 if isAct ? !agent.items.isEmpty : !session.messages.isEmpty {
-                    GlassIconButton(symbol: "square.and.pencil", tint: nil, help: "New chat") { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } }
+                    GlassIconButton(symbol: "square.and.pencil", tint: nil, help: tr("New chat")) { withAnimation(.snappy) { if isAct { agent.clear() } else { session.clear() } } }
                 }
                 GlassIconButton(symbol: model.isFloating ? "arrow.down.right.and.arrow.up.left" : "macwindow.on.rectangle", tint: nil,
-                                help: model.isFloating ? "Dock to the Window" : "Float in Its Own Window") { model.onToggleFloating() }
+                                help: tr(model.isFloating ? "Dock to the Window" : "Float in Its Own Window")) { model.onToggleFloating() }
             }
-            GlassIconButton(symbol: "xmark", tint: nil, help: "Close  ⇧⌘A", anchor: .trailing) { model.onClose() }
+            GlassIconButton(symbol: "xmark", tint: nil, help: tr("Close  ⇧⌘A"), anchor: .trailing) { model.onClose() }
         }
     }
 
@@ -234,7 +234,7 @@ struct AssistantPanelView: View {
                 .paneGlass(Circle(), tint: busy ? Color.red : (model.draft.trimmingCharacters(in: .whitespaces).isEmpty ? Color.secondary : model.accent))
         }
         .buttonStyle(.plain)
-        .paneTooltip(busy ? "Stop  ⌘." : "Send  ↩", anchor: .trailing)
+        .paneTooltip(tr(busy ? "Stop  ⌘." : "Send  ↩"), anchor: .trailing)
         .accessibilityLabel(busy ? "Stop" : "Send")
     }
 
@@ -254,7 +254,7 @@ struct AssistantPanelView: View {
             .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
-        .paneTooltip(voice.isListening ? "Stop dictation" : "Dictate", anchor: .trailing)
+        .paneTooltip(tr(voice.isListening ? "Stop dictation" : "Dictate"), anchor: .trailing)
         .accessibilityLabel(voice.isListening ? "Stop dictation" : "Dictate")
     }
 

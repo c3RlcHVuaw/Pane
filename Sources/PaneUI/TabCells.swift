@@ -20,11 +20,8 @@ func tabIcon(_ image: NSImage?) -> NSImage {
 
 /// Rounded highlight instead of the stock full-width source-list selection.
 final class PaneRowView: NSTableRowView {
-    override func drawSelection(in dirtyRect: NSRect) {
-        let r = bounds.insetBy(dx: 2, dy: 1)
-        Style.fill(0.14).setFill()
-        NSBezierPath(roundedRect: r, xRadius: 9, yRadius: 9).fill()
-    }
+    /// The selection is a pill the sidebar slides between rows; the row itself draws nothing.
+    override func drawSelection(in dirtyRect: NSRect) {}
     override var isEmphasized: Bool { get { false } set {} }
 
     private var hovered = false { didSet { needsDisplay = true } }
@@ -210,11 +207,46 @@ final class GroupCellView: NSTableCellView {
     }
 }
 
-/// Outline view that asks its owner for a per-row context menu.
+/// Outline view that asks its owner for a per-row context menu (or the background menu on empty space).
 final class ContextOutlineView: NSOutlineView {
     var menuProvider: ((Int) -> NSMenu?)?
+    var backgroundMenuProvider: (() -> NSMenu?)?
     override func menu(for event: NSEvent) -> NSMenu? {
         let row = self.row(at: convert(event.locationInWindow, from: nil))
-        return row >= 0 ? menuProvider?(row) : nil
+        return row >= 0 ? (menuProvider?(row) ?? backgroundMenuProvider?()) : backgroundMenuProvider?()
+    }
+}
+
+/// Rounded highlight behind the active tab; glides to the new row instead of jumping.
+final class SelectionPill: NSView {
+    private var placed = false
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.cornerCurve = .continuous
+        alphaValue = 0
+        refreshColor()
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    private func refreshColor() { effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = Style.fill(0.14).cgColor } }
+    override func viewDidChangeEffectiveAppearance() { refreshColor() }
+
+    func move(to rect: NSRect) {
+        guard placed, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            frame = rect; alphaValue = 1; placed = true; return
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
+            ctx.allowsImplicitAnimation = true
+            animator().frame = rect
+            animator().alphaValue = 1
+        }
+    }
+    func hide() {
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; animator().alphaValue = 0 }
+        placed = false
     }
 }

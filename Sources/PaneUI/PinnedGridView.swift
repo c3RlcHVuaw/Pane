@@ -98,6 +98,8 @@ final class PinnedGridView: NSView {
     var onSelect: ((UUID) -> Void)?
     var onDrop: ((UUID, UUID?) -> Void)?  // dragged id, pin to insert before
     var menuProvider: ((UUID) -> NSMenu?)?
+    var backgroundMenuProvider: (() -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? { backgroundMenuProvider?() }
     private var tiles: [PinTile] = []
     private var heightConstraint: NSLayoutConstraint!
 

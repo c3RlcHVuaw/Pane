@@ -226,9 +226,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     // MARK: Lifecycle
 
     public func start() {
-        defer { showWhatsNewIfNeeded(); startWatching() }
+        defer { showWhatsNewIfNeeded(); startWatching(); installSwipeNavigation() }
         if syncScheduler != nil { vault.onChange = { [weak self] in self?.syncScheduler?.scheduleSync() } }
         engine.setContentBlocking(settings.blockAds)
+        engine.setDocumentStartScript(NotificationShim.script(decisions: notificationDecisions))
         let restored = sessionURL.map { store.load(from: $0) } ?? false
         if !restored { store.addTab(url: settings.newTabURL) }
         else if settings.startup == .newTab { store.addTab(url: settings.newTabURL) }
@@ -330,7 +331,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                         return await ReleaseHistory.load(feedURL: url)
                     },
                     openPage: { [weak self] url in self?.open(url, newTab: true) },
-                    showHistory: { [weak self] in self?.showHistory(nil) }))
+                    showHistory: { [weak self] in self?.showHistory(nil) },
+                    notificationDecisions: { [weak self] in self?.notificationDecisions ?? [:] },
+                    setNotificationDecision: { [weak self] origin, value in
+                        guard let self else { return }
+                        var all = self.notificationDecisions; all[origin] = value; self.notificationDecisions = all
+                    }))
         }
         settingsWindow?.show()
     }
@@ -399,6 +405,38 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             log += "round \(r): tabs=\(store.tabs.count) live=\(live.count)\n"
         }
         return log + "survived"
+    }
+
+    /// Debug aid: hammers the sidebar with random moves, groups, pins, sleeps and closes at different speeds.
+    public func debugSidebarStress(steps: Int) async -> String {
+        var rng = SystemRandomNumberGenerator()
+        var made = 0
+        for step in 0..<steps {
+            let tabs = store.tabs
+            let op = Int.random(in: 0..<9, using: &rng)
+            if ProcessInfo.processInfo.environment["PANE_DEBUG_SIDEBAR_LOG"] != nil { NSLog("sidebar step \(step) op \(op) tabs \(tabs.count)") }
+            switch op {
+            case 0, 1:
+                store.addTab(url: "about:blank#\(step)", activate: false); made += 1
+            case 2:
+                if store.groups.count < 4 { store.createGroup(name: "G\(step)", colorIndex: step) }
+            case 3:
+                if let t = tabs.randomElement(using: &rng), let g = store.groups.randomElement(using: &rng) { store.move(t.id, toGroup: g.id) }
+            case 4:
+                if let t = tabs.randomElement(using: &rng) { store.move(t.id, toGroup: nil, before: tabs.randomElement(using: &rng)?.id) }
+            case 5:
+                if let t = tabs.randomElement(using: &rng) { t.isPinned ? store.unpin(t.id) : store.pin(t.id) }
+            case 6:
+                if let t = tabs.randomElement(using: &rng), t.id != store.activeTabID { _ = store.sleep(t.id) }
+            case 7:
+                if tabs.count > 3, let t = tabs.randomElement(using: &rng) { store.close(t.id); destroyLive(t.id); showActive() }
+            default:
+                if let g = store.groups.randomElement(using: &rng) { if Bool.random() { store.deleteGroup(g.id) } else { store.setGroupCollapsed(g.id, !g.isCollapsed); sidebar.reload() } }
+            }
+            try? await Task.sleep(nanoseconds: UInt64([0, 20, 60, 160].randomElement(using: &rng)!) * 1_000_000)
+        }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        return "sidebar survived: steps=\(steps) tabs=\(store.tabs.count) groups=\(store.groups.count) made=\(made)"
     }
 
     /// Debug aid: feeds absurdly long text to every place that shows page-controlled text.
@@ -536,6 +574,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             out += "\(u): \(store.activeTabID.flatMap { store.tab($0)?.title } ?? "") | \(text.prefix(70).replacingOccurrences(of: "\n", with: " "))\n"
         }
         return out
+    }
+
+    public func debugSiteNotifications() async -> String {
+        UserDefaults.standard.removeObject(forKey: "notificationDecisions")
+        store.addTab(url: "http://127.0.0.1:8765/notif.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        guard let tab = activeLive?.tab else { return "no tab" }
+        let p = try? JSONSerialization.data(withJSONObject: ["expression": "JSON.stringify({r: window.result, shim: !!window.__paneNotif, kind: String(Notification).slice(0, 40), url: location.href})", "returnByValue": true])
+        let r = (try? await tab.devTools("Runtime.evaluate", params: p.flatMap { String(data: $0, encoding: .utf8) })) ?? "none"
+        return r + "\nposted: \(debugNotifications)\ndecisions: \(notificationDecisions)"
     }
 
     public func debugProbe() async -> String {
@@ -845,7 +893,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         try? history.save(to: s.history)
     }
 
-    public func windowShouldClose(_ sender: NSWindow) -> Bool { ProcessInfo.processInfo.environment["PANE_DEBUG_STRESS_ALL"] == nil }
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["PANE_DEBUG_STRESS_ALL"] == nil && env["PANE_DEBUG_SIDEBAR"] == nil
+    }
 
     public func windowWillClose(_ notification: Notification) {
         saveNow()
@@ -1650,7 +1701,83 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         fillLogin(login)
     }
 
+    // MARK: Site notifications
+
+    /// Which sites may show notifications ("granted" / "denied"), remembered across launches.
+    public var notificationDecisions: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: "notificationDecisions") as? [String: String] ?? [:] }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "notificationDecisions")
+            engine.setDocumentStartScript(NotificationShim.script(decisions: newValue))
+            let update = "window.__paneNotifDecisions = \(Self.jsonObject(newValue));"
+            for l in live.values { Task { _ = try? await l.tab.devTools("Runtime.evaluate", params: Self.json(["expression": update])) } }
+        }
+    }
+
+    private static func jsonObject(_ d: [String: String]) -> String { (try? JSONSerialization.data(withJSONObject: d)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}" }
+
+    private var lastNotifications: [UUID: [Date]] = [:]
+
+    private func handleNotificationMessage(_ message: String, tabID id: UUID, tab: BrowserTab) {
+        guard let data = String(message.dropFirst("__pane-notif:".count)).data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let kind = o["k"] as? String, let url = store.tab(id).flatMap({ URL(string: $0.url) }), let host = url.host else { return }
+        let origin = "\(url.scheme ?? "https")://\(host)" + (url.port.map { ":\($0)" } ?? "")
+        switch kind {
+        case "ask":
+            guard let window else { return }
+            if let known = notificationDecisions[origin] { answerNotificationRequest(known, on: tab); return }
+            if isPrivate { answerNotificationRequest("denied", on: tab); return }
+            if let forced = ProcessInfo.processInfo.environment["PANE_DEBUG_NOTIF"] {  // test runs answer without a dialog
+                var all = notificationDecisions; all[origin] = forced; notificationDecisions = all; answerNotificationRequest(forced, on: tab); return
+            }
+            let alert = NSAlert()
+            alert.messageText = String(localized: "“\(host)” wants to show notifications")
+            alert.informativeText = tr("They appear in the macOS notification centre while this page is open in Pane.")
+            alert.addButton(withTitle: tr("Allow")); alert.addButton(withTitle: tr("Don't Allow"))
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self else { return }
+                let decision = response == .alertFirstButtonReturn ? "granted" : "denied"
+                var all = self.notificationDecisions; all[origin] = decision; self.notificationDecisions = all
+                self.answerNotificationRequest(decision, on: tab)
+            }
+        case "show":
+            guard notificationDecisions[origin] == "granted" else { return }
+            var recent = (lastNotifications[id] ?? []).filter { Date().timeIntervalSince($0) < 60 }
+            guard recent.count < 6 else { return }   // a page can't flood the notification centre
+            recent.append(Date()); lastNotifications[id] = recent
+            let content = UNMutableNotificationContent()
+            content.title = String((o["title"] as? String ?? host).prefix(120))
+            content.subtitle = host
+            content.body = String((o["body"] as? String ?? "").prefix(300))
+            content.sound = .default
+            content.userInfo = ["tab": id.uuidString, "url": store.tab(id)?.url ?? ""]
+            guard ProcessInfo.processInfo.environment["PANE_DEBUG_NO_NOTIFY"] == nil else { debugNotifications.append(content.title); return }
+            let center = UNUserNotificationCenter.current()
+            center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                guard granted else { return }
+                center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            }
+        default: break
+        }
+    }
+
+    var debugNotifications: [String] = []
+
+    private func answerNotificationRequest(_ decision: String, on tab: BrowserTab) {
+        Task { _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "window.__paneNotifAnswer && window.__paneNotifAnswer('\(decision)')"])) }
+    }
+
+    /// A notification was clicked: bring the tab (or the address) forward.
+    public func openNotification(tabID: String?, url: String) {
+        window?.makeKeyAndOrderFront(nil)
+        if let s = tabID, let id = UUID(uuidString: s), store.tab(id) != nil { activate(id) } else if !url.isEmpty { open(url, newTab: true) }
+    }
+
     public func tab(_ tab: BrowserTab, didSendPageMessage message: String) {
+        if message.hasPrefix("__pane-notif:") {
+            if let id = tabIDs[ObjectIdentifier(tab as AnyObject)] { handleNotificationMessage(message, tabID: id, tab: tab) }
+            return
+        }
         guard !kind.isPrivate, vault.isPersistent, settings.offerToSavePasswords, let id = tabIDs[ObjectIdentifier(tab as AnyObject)],
               message.hasPrefix("__pane:\(pageNonce):"),
               let data = String(message.dropFirst("__pane:\(pageNonce):".count)).data(using: .utf8),
@@ -2317,6 +2444,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         showActive()
     }
 
+    var canReopenClosed: Bool { !closedTabs.isEmpty }
+    func reopenClosed() { reopenClosedTab(nil) }
+    func sleepInactive() {
+        for t in store.tabs where !t.isPinned && !t.isSleeping && t.id != store.activeTabID { sleep(t.id) }
+    }
+
     @objc public func reopenClosedTab(_ sender: Any?) {
         guard let e = closedTabs.pop() else { NSSound.beep(); return }
         let id = store.addTab(url: e.url, groupID: e.groupID)
@@ -2470,6 +2603,34 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// After cookies are gone, pages that were signed in should notice: reload the visible one.
     func liveTabsReload() { activeLive?.tab.reload() }
+
+    // MARK: Swipe between pages
+
+    private var swipeMonitor: Any?
+
+    /// Two-finger (or three-finger) swipe on the trackpad goes back and forward, like in Safari. Turned on in System Settings ▸ Trackpad ▸ "Swipe between pages".
+    private func installSwipeNavigation() {
+        swipeMonitor = NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
+            let dx = event.deltaX, sameWindow = event.window
+            let handled: Bool = MainActor.assumeIsolated {
+                guard let self, sameWindow === self.window, self.settings.swipeNavigation, let tab = self.activeLive?.tab, let id = self.store.activeTabID,
+                      self.fullscreenSaved == nil, self.pdfOverlays[id] == nil else { return false }
+                if dx > 0, self.navState[id]?.canGoBack == true { self.nudgePage(toward: 1); tab.goBack(); return true }
+                if dx < 0, self.navState[id]?.canGoForward == true { self.nudgePage(toward: -1); tab.goForward(); return true }
+                return false
+            }
+            return handled ? nil : event
+        }
+    }
+
+    /// A short slide of the page in the swipe direction so the gesture feels answered.
+    private func nudgePage(toward direction: CGFloat) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let layer = webHost.layer else { return }
+        let a = CABasicAnimation(keyPath: "transform.translation.x")
+        a.fromValue = 0; a.toValue = 28 * direction; a.duration = 0.16; a.autoreverses = true
+        a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(a, forKey: "swipe-nudge")
+    }
 
     // MARK: Files and sharing
 

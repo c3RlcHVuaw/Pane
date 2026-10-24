@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 import CEFBridge
 import PaneCEF
 import PaneEngine
@@ -47,7 +48,7 @@ struct DemoAgentProvider: AgentProvider {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     var engine: CEFEngine?
     /// Every open browser window. The first is the main one; it also owns Settings and the update button.
     var controllers: [BrowserWindowController] = []
@@ -67,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let account = AccountSession(defaults: AppDelegate.testDefaults ?? .standard)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         // Test mode (PANE_SUPPORT_DIR / PANE_OFFSCREEN): a separate profile and a window parked off-screen,
         // so a test instance never touches the real session or steals focus.
@@ -137,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if env["PANE_DEBUG_SPLIT"] != nil { Task { @MainActor in try? (await win?.debugSplit() ?? "").write(toFile: prefix + "-split.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_PW"] != nil { Task { @MainActor in try? (await win?.debugPasswords() ?? "").write(toFile: prefix + "-pw.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_STRESS_ALL"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugStressEverything(rounds: n) ?? "").write(toFile: prefix + "-stress.txt", atomically: true, encoding: .utf8) } }
+                    if let n = env["PANE_DEBUG_SIDEBAR"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugSidebarStress(steps: n) ?? "").write(toFile: prefix + "-sidebar.txt", atomically: true, encoding: .utf8) } }
                     if let l = env["PANE_DEBUG_LONG"] { win?.debugLongStrings(Set(l.split(separator: ",").map(String.init))) }
                     if env["PANE_DEBUG_FEATURES"] != nil { Task { @MainActor in try? (await win?.debugFeatures() ?? "").write(toFile: prefix + "-features.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_QUIT"].flatMap(Int.init) { Task { @MainActor in await win?.debugQuitAfterOpening(n) } }
@@ -148,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if env["PANE_DEBUG_CONTEXT"] != nil { Task { @MainActor in try? (await win?.debugContextMenus() ?? "").write(toFile: prefix + "-context.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_RIGHTCLICK"] != nil { Task { @MainActor in await win?.debugRightClick() } }
                     if env["PANE_DEBUG_INTERNAL"] != nil { Task { @MainActor in try? (await win?.debugInternalPages() ?? "").write(toFile: prefix + "-internal.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_SITENOTIF"] != nil { Task { @MainActor in try? (await win?.debugSiteNotifications() ?? "").write(toFile: prefix + "-sitenotif.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_PEEK"] != nil { win?.debugPeek() }
                     if env["PANE_DEBUG_FOCUS_ADDRESS"] != nil { win?.focusAddressBar() }
                     if env["PANE_DEBUG_HOVER"] != nil { win?.debugHoverToolbar() }
@@ -211,6 +215,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.accessoryView = scroll
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { _ = await CrashReporter.send(summary, to: url) }
+    }
+
+    // Notifications (page watches and sites) show even while Pane is in front; a click goes to the page.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .sound] }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        let info = response.notification.request.content.userInfo
+        let tab = info["tab"] as? String, url = info["url"] as? String ?? ""
+        await MainActor.run { (self.active ?? self.controllers.first)?.openNotification(tabID: tab, url: url) }
     }
 
     /// Links and files from other apps.

@@ -70,6 +70,8 @@ public final class AppSettings: ObservableObject {
     @Published public var agentPrivate: Bool { didSet { save("agentPrivate", agentPrivate) } }
     /// Ask the search engine for suggestions while typing in the address bar.
     @Published public var webSuggestions: Bool { didSet { save("webSuggestions", webSuggestions) } }
+    /// Two-finger swipe goes back and forward.
+    @Published public var swipeNavigation: Bool { didSet { save("swipeNavigation", swipeNavigation) } }
     @Published public var theme: ThemeChoice { didSet { save("theme", theme.rawValue) } }
     @Published public var offerToSavePasswords: Bool { didSet { save("offerToSavePasswords", offerToSavePasswords) } }
     @Published public var sidebarTint: Bool { didSet { save("sidebarTint", sidebarTint) } }
@@ -101,6 +103,7 @@ public final class AppSettings: ObservableObject {
         rememberPageText = defaults.object(forKey: "rememberPageText") as? Bool ?? true
         agentPrivate = defaults.object(forKey: "agentPrivate") as? Bool ?? false
         webSuggestions = defaults.object(forKey: "webSuggestions") as? Bool ?? true
+        swipeNavigation = defaults.object(forKey: "swipeNavigation") as? Bool ?? true
         theme = ThemeChoice(rawValue: defaults.string(forKey: "theme") ?? "") ?? .system
         assistantProvider = defaults.string(forKey: "assistantProvider") ?? "anthropic"
         assistantModel = defaults.string(forKey: "assistantModel") ?? "claude-sonnet-5-5"
