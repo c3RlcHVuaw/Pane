@@ -214,7 +214,7 @@ static const uint32_t kPermissionsAsked = CEF_PERMISSION_TYPE_CAMERA_STREAM | CE
     CEF_PERMISSION_TYPE_CLIPBOARD | CEF_PERMISSION_TYPE_MIDI_SYSEX | CEF_PERMISSION_TYPE_LOCAL_FONTS | CEF_PERMISSION_TYPE_FILE_SYSTEM_ACCESS;
 
 class PCClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler,
-                 public CefAudioHandler, public CefDownloadHandler, public CefRequestHandler, public CefFindHandler, public CefResourceRequestHandler, public CefPermissionHandler, public CefContextMenuHandler {
+                 public CefAudioHandler, public CefDownloadHandler, public CefRequestHandler, public CefFindHandler, public CefResourceRequestHandler, public CefPermissionHandler, public CefContextMenuHandler, public CefJSDialogHandler {
  public:
   explicit PCClient(PCBrowser *owner) : owner_(owner) {}
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -258,6 +258,32 @@ class PCClient : public CefClient, public CefLifeSpanHandler, public CefDisplayH
     dispatch_async(dispatch_get_main_queue(), ^{ [o.delegate browserShowsContextMenu:info]; });
     return true;
   }
+
+  // MARK: JavaScript dialogs (alert, confirm, prompt) and "Leave this page?"
+  CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
+
+  bool OnJSDialog(CefRefPtr<CefBrowser>, const CefString &origin, JSDialogType type, const CefString &message, const CefString &defaultPrompt,
+                  CefRefPtr<CefJSDialogCallback> cb, bool &suppress) override {
+    PCBrowser *o = owner_;
+    if (!o || ![o.delegate respondsToSelector:@selector(browserShowsDialog:origin:message:defaultText:completion:)]) { suppress = true; return false; }
+    NSInteger kind = type == JSDIALOGTYPE_ALERT ? 0 : (type == JSDIALOGTYPE_CONFIRM ? 1 : 2);
+    NSString *origin_ = NS(origin), *msg = NS(message), *def = NS(defaultPrompt);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [o.delegate browserShowsDialog:kind origin:origin_ message:msg defaultText:def completion:^(BOOL ok, NSString *text) { cb->Continue(ok, CefString(text.UTF8String ?: "")); }];
+    });
+    return true;
+  }
+
+  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser>, const CefString &message, bool isReload, CefRefPtr<CefJSDialogCallback> cb) override {
+    PCBrowser *o = owner_;
+    if (!o || ![o.delegate respondsToSelector:@selector(browserShowsDialog:origin:message:defaultText:completion:)]) { cb->Continue(true, CefString("")); return true; }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [o.delegate browserShowsDialog:3 origin:@"" message:NS(message) defaultText:isReload ? @"reload" : @"" completion:^(BOOL ok, NSString *) { cb->Continue(ok, CefString("")); }];
+    });
+    return true;
+  }
+
+  void OnResetDialogState(CefRefPtr<CefBrowser>) override {}
 
   // MARK: Permissions (camera, microphone, location…). Without this, Chromium's Alloy style silently refuses everything.
   bool OnRequestMediaAccessPermission(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString &origin, uint32_t requested,

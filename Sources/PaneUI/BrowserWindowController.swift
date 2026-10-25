@@ -436,6 +436,67 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         return r
     }
 
+    /// Debug aid: misbehaving pages (crashes, popups, dialogs, endless scripts, huge pages) must not take the browser down.
+    public func debugChaos() async -> String {
+        var out = ""
+        func js(_ e: String) async -> String { (try? await activeLive?.tab.devTools("Runtime.evaluate", params: Self.json(["expression": e, "returnByValue": true]))) ?? "nil" }
+        // A responsive main thread: a timer that keeps firing while the rest runs.
+        var ticks = 0
+        let ticker = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in ticks += 1 }
+        defer { ticker.invalidate() }
+
+        // 1. popups
+        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let before = store.tabs.count
+        _ = await js("for (let i = 0; i < 25; i++) window.open('http://127.0.0.1:8765/ads.html'); 1")
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out += "popups: +\(store.tabs.count - before) tabs\n"
+
+        // 2. JS dialogs
+        let t0 = Date()
+        _ = await js("setTimeout(() => { alert('hello'); window.__d = [confirm('sure?'), prompt('name?', 'def')].join('|'); }, 10); 1")
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        out += "dialogs: main thread alive=\(Date().timeIntervalSince(t0) < 4) result=\(await js("window.__d"))\n"
+
+        // 3. an endless script
+        _ = await js("setTimeout(() => { while (true) {} }, 10); 1")
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        let ticksBefore = ticks
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        out += "endless script: ui ticks in 1s=\(ticks - ticksBefore)\n"
+        if let id = store.activeTabID { close(id) }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // 4. a huge page
+        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let big = await js("(() => { const d = document.createElement('div'); for (let i = 0; i < 150000; i++) { const s = document.createElement('span'); s.textContent = 'x' + i; d.appendChild(s); } document.body.appendChild(d); return document.querySelectorAll('span').length })()")
+        out += "huge page: \(big.prefix(60))\n"
+
+        // 5. renderer crash and recovery
+        navigate("chrome://crash")
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        let overlay = store.activeTabID.map { crashOverlays[$0] != nil } ?? false
+        out += "renderer crash: overlay=\(overlay)\n"
+        if let id = store.activeTabID { crashOverlays.removeValue(forKey: id)?.removeFromSuperview(); navigate("http://127.0.0.1:8765/form.html") }
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out += "after crash: " + (await js("document.title")) + "\n"
+
+        // 6. navigation storm
+        for i in 0..<40 { navigate(i % 2 == 0 ? "http://127.0.0.1:8765/ads.html" : "http://127.0.0.1:8765/form.html") }
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out += "storm: " + (await js("document.title")) + "\n"
+
+        // 7. opening and closing many tabs at once
+        var ids: [UUID] = []
+        for _ in 0..<20 { ids.append(store.addTab(url: "http://127.0.0.1:8765/ads.html", activate: true)); showActive() }
+        for id in ids { close(id) }
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        out += "tab storm: tabs=\(store.tabs.count) live=\(live.count)\n"
+        return out + "survived"
+    }
+
     /// Debug aid: Back after the first page of a new tab must return to the previous page, not to a blank one.
     public func debugBack() async -> String {
         store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
@@ -988,7 +1049,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     public func windowShouldClose(_ sender: NSWindow) -> Bool {
         let env = ProcessInfo.processInfo.environment
-        return env["PANE_DEBUG_STRESS_ALL"] == nil && env["PANE_DEBUG_SIDEBAR"] == nil
+        return env["PANE_DEBUG_STRESS_ALL"] == nil && env["PANE_DEBUG_SIDEBAR"] == nil && env["PANE_DEBUG_CHAOS"] == nil
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -3537,6 +3598,39 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             let allow = response == .alertFirstButtonReturn
             if remember.state == .on { kinds.forEach { self?.grantedPermissions["\(origin)|\($0)"] = allow } }
             decide(allow)
+        }
+    }
+
+    private var dialogLog: [UUID: [Date]] = [:]
+
+    public func tab(_ tab: BrowserTab, showsDialog dialog: PageDialog, answer: @escaping @MainActor (Bool, String) -> Void) {
+        let id = tabIDs[ObjectIdentifier(tab as AnyObject)]
+        // A page that fires dialog after dialog is cut off; so is one nobody is looking at.
+        var recent = id.flatMap { dialogLog[$0] }?.filter { Date().timeIntervalSince($0) < 8 } ?? []
+        recent.append(Date())
+        if let id { dialogLog[id] = recent }
+        guard let window, id == store.activeTabID || id == agentPrivateTabID, recent.count <= 3 else {
+            if recent.count == 4, id == store.activeTabID { ToastView.show(in: webHost, message: "A page keeps showing dialogs — blocked", symbol: "bell.slash", duration: 3) }
+            answer(dialog.kind == .alert || dialog.kind == .beforeUnload && false, ""); return
+        }
+        let host = URL(string: dialog.origin)?.host ?? (store.activeTabID.flatMap { store.tab($0)?.url }.flatMap { URL(string: $0)?.host } ?? "")
+        if let forced = ProcessInfo.processInfo.environment["PANE_DEBUG_DIALOG"] { answer(forced == "ok", dialog.defaultText); return }  // test runs answer without a dialog
+        let alert = NSAlert()
+        alert.messageText = dialog.kind == .beforeUnload ? tr("Leave this page?") : (host.isEmpty ? tr("This page says") : String(localized: "“\(host)” says"))
+        alert.informativeText = dialog.kind == .beforeUnload ? tr("Changes you made may not be saved.") : String(dialog.message.prefix(1000))
+        var field: NSTextField?
+        if dialog.kind == .prompt {
+            let f = NSTextField(string: dialog.defaultText); f.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+            alert.accessoryView = f; alert.window.initialFirstResponder = f; field = f
+        }
+        switch dialog.kind {
+        case .alert: alert.addButton(withTitle: tr("OK"))
+        case .confirm, .prompt: alert.addButton(withTitle: tr("OK")); alert.addButton(withTitle: tr("Cancel"))
+        case .beforeUnload: alert.addButton(withTitle: tr("Leave")); alert.addButton(withTitle: tr("Stay"))
+        }
+        alert.beginSheetModal(for: window) { response in
+            let ok = response == .alertFirstButtonReturn
+            answer(dialog.kind == .alert ? true : ok, field?.stringValue ?? "")
         }
     }
 

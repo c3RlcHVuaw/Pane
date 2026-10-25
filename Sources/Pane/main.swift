@@ -160,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                             try? "windows left=\(self.controllers.count) survived".write(toFile: prefix + "-windows.txt", atomically: true, encoding: .utf8)
                         }
                     }
+                    if env["PANE_DEBUG_CHAOS"] != nil { Task { @MainActor in try? (await win?.debugChaos() ?? "").write(toFile: prefix + "-chaos.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_EXTPOPUP"] != nil { Task { @MainActor in try? (await win?.debugExtensionPopup() ?? "").write(toFile: prefix + "-extpopup.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_SPELLUL"] != nil { Task { @MainActor in try? (await win?.debugSpellUnderline() ?? "").write(toFile: prefix + "-spellul.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_BACK"] != nil { Task { @MainActor in try? (await win?.debugBack() ?? "").write(toFile: prefix + "-back.txt", atomically: true, encoding: .utf8) } }

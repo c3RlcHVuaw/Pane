@@ -119,6 +119,10 @@ final class CEFTab: NSObject, BrowserTab, PCBrowserDelegate {
     func browserFindResultCount(_ count: Int, active: Int) { delegate?.tab(self, findResultCount: count, active: active) }
     func browserStatusChanged(_ text: String) { delegate?.tab(self, statusChanged: text) }
     func browserPageMessage(_ message: String) { delegate?.tab(self, didSendPageMessage: message) }
+    func browserShowsDialog(_ kind: Int, origin: String, message: String, defaultText: String, completion: @escaping (Bool, String) -> Void) {
+        guard let delegate else { completion(kind == 0, ""); return }
+        delegate.tab(self, showsDialog: PageDialog(kind: PageDialog.Kind(rawValue: kind) ?? .alert, origin: origin, message: message, defaultText: defaultText)) { completion($0, $1) }
+    }
     func browserRequestsPermission(_ origin: String, kinds: [String], decision: @escaping (Bool) -> Void) {
         delegate?.tab(self, requestsPermission: origin, kinds: kinds) { decision($0) } ?? decision(false)
     }

@@ -1,6 +1,13 @@
 import AppKit
 
 /// Engine-agnostic abstractions. The UI layer talks only to these; the CEF layer implements them.
+/// A JavaScript dialog or "leave this page?" question from a page.
+public struct PageDialog: Sendable {
+    public enum Kind: Int, Sendable { case alert = 0, confirm, prompt, beforeUnload }
+    public var kind: Kind, origin: String, message: String, defaultText: String
+    public init(kind: Kind, origin: String, message: String, defaultText: String) { self.kind = kind; self.origin = origin; self.message = message; self.defaultText = defaultText }
+}
+
 @MainActor
 public protocol BrowserTabDelegate: AnyObject {
     func tab(_ tab: BrowserTab, didChangeTitle title: String)
@@ -24,6 +31,8 @@ public protocol BrowserTabDelegate: AnyObject {
     func tab(_ tab: BrowserTab, requestsLoginFor host: String, realm: String, isProxy: Bool, complete: @escaping @MainActor (_ user: String?, _ password: String?) -> Void)
     /// The page's certificate isn't trusted. `proceed(true)` continues anyway.
     func tab(_ tab: BrowserTab, certificateProblemFor url: String, proceed: @escaping @MainActor (Bool) -> Void)
+    /// The page shows a dialog. Call `answer` exactly once (for prompts the text is the reply).
+    func tab(_ tab: BrowserTab, showsDialog dialog: PageDialog, answer: @escaping @MainActor (_ ok: Bool, _ text: String) -> Void)
     /// The page entered or left HTML fullscreen.
     func tab(_ tab: BrowserTab, fullscreenChanged on: Bool)
     /// The user right-clicked the page; show a menu for what is under the pointer.
@@ -53,6 +62,7 @@ public struct ContextMenuInfo: Sendable {
 public enum EditCommand: String, Sendable { case undo, redo, cut, copy, paste, pasteplain = "pasteplain", delete, selectAll }
 
 public extension BrowserTabDelegate {
+    func tab(_ tab: BrowserTab, showsDialog dialog: PageDialog, answer: @escaping @MainActor (Bool, String) -> Void) { answer(dialog.kind == .alert, "") }
     func tab(_ tab: BrowserTab, requestsPermission origin: String, kinds: [String], decide: @escaping @MainActor (Bool) -> Void) { decide(false) }
     func tab(_ tab: BrowserTab, requestsLoginFor host: String, realm: String, isProxy: Bool, complete: @escaping @MainActor (String?, String?) -> Void) { complete(nil, nil) }
     func tab(_ tab: BrowserTab, certificateProblemFor url: String, proceed: @escaping @MainActor (Bool) -> Void) { proceed(false) }

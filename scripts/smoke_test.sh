@@ -61,6 +61,14 @@ echo "Spelling underline"
 run spellul 12 PANE_DEBUG_SPELLUL=1
 grep -q "spans=[1-9]" "$OUT/spellul-spellul.txt" 2>/dev/null && pass "misspelled words are underlined" || fail "spelling underline"
 
+echo "Misbehaving pages"
+run chaos 60 PANE_DEBUG_CHAOS=1 PANE_DEBUG_DIALOG=ok
+C="$OUT/chaos-chaos.txt"
+grep -q "result=.*true|def" "$C" 2>/dev/null && pass "alert, confirm and prompt answered" || fail "JS dialogs"
+grep -q "endless script: ui ticks in 1s=[5-9]\|ui ticks in 1s=[1-9][0-9]" "$C" 2>/dev/null && pass "UI stays responsive while a page loops forever" || fail "endless script blocked the UI"
+grep -q "renderer crash: overlay=true" "$C" 2>/dev/null && pass "a crashed page shows the reload card" || fail "renderer crash overlay"
+grep -q "survived" "$C" 2>/dev/null && pass "popups, huge page, navigation and tab storms survived" || fail "chaos run did not finish"
+
 echo "Back after the first page"
 run back 14 PANE_DEBUG_BACK=1
 grep -q "canGoBack=true afterBack=http://127.0.0.1:8765/form.html" "$OUT/back-back.txt" 2>/dev/null && pass "Back returns to the previous page" || fail "Back after a new tab's first page"

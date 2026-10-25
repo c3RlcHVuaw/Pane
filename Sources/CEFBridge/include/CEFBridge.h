@@ -23,6 +23,8 @@ NS_SWIFT_UI_ACTOR
 /// A line the page's Pane script wrote to the console ("__pane:…"); never page content the user wrote.
 - (void)browserPageMessage:(NSString *)message;
 @optional
+/// A page shows alert (0), confirm (1), prompt (2) or a "leave this page?" question (3). Answer through `completion` exactly once.
+- (void)browserShowsDialog:(NSInteger)kind origin:(NSString *)origin message:(NSString *)message defaultText:(NSString *)defaultText completion:(void (^)(BOOL ok, NSString *text))completion;
 /// A page asks for a permission (camera, microphone, location, clipboard…). `kinds` are plain words such as "camera"; call `decision` once.
 - (void)browserRequestsPermission:(NSString *)origin kinds:(NSArray<NSString *> *)kinds decision:(void (^)(BOOL allow))decision;
 /// A server asks for a user name and password (HTTP authentication).
