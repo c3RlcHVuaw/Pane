@@ -111,7 +111,7 @@ public enum QuickAnswers {
     public static func rates() async -> [String: Double]? {
         if let c = cache, Date().timeIntervalSince(c.date) < 6 * 3600 { return c.rates }
         guard let url = URL(string: "https://open.er-api.com/v6/latest/USD"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
+              let (data, _) = try? await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 6)),
               let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let r = o["rates"] as? [String: Double] else { return cache?.rates }
         cache = (Date(), r)
         return r

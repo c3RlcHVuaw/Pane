@@ -3558,7 +3558,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         Task.detached {
             var image: NSImage?
             if source.hasPrefix("data:"), let comma = source.firstIndex(of: ","), let d = Data(base64Encoded: String(source[source.index(after: comma)...])) { image = NSImage(data: d) }
-            else if let url = URL(string: source), let (d, _) = try? await URLSession.shared.data(from: url) { image = NSImage(data: d) }
+            else if let url = URL(string: source), let (d, _) = try? await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 8)) { image = NSImage(data: d) }
             guard let image else { return }
             await MainActor.run { NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([image]) }
         }

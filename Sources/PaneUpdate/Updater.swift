@@ -83,7 +83,7 @@ public final class DefaultAppUpdater: NSObject, AppUpdater, URLSessionDownloadDe
         if userInitiated { state = .checking }
         Task {
             do {
-                let (data, _) = try await URLSession.shared.data(from: feedURL)
+                let (data, _) = try await URLSession.shared.data(for: URLRequest(url: feedURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15))
                 let feed = try JSONDecoder().decode(UpdateFeed.self, from: data)
                 guard let url = URL(string: feed.url, relativeTo: feedURL)?.absoluteURL else { throw UpdateError.message(tr("Bad update URL")) }
                 if feed.build > currentBuild {
@@ -114,6 +114,7 @@ public final class DefaultAppUpdater: NSObject, AppUpdater, URLSessionDownloadDe
         if appURL.path.contains("/AppTranslocation/") || !FileManager.default.isWritableFile(atPath: parent.path) {
             throw UpdateError.message(tr("Move Pane to your Applications folder, then update."))
         }
+        Self.sweepLeftovers()
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("PaneUpdate-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
 
@@ -166,10 +167,22 @@ public final class DefaultAppUpdater: NSObject, AppUpdater, URLSessionDownloadDe
         }
     }
 
+    /// Removes what earlier, interrupted updates left in the temporary folder (they are hundreds of megabytes each).
+    private static func sweepLeftovers() {
+        let tmp = FileManager.default.temporaryDirectory
+        let items = (try? FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for u in items where u.lastPathComponent.hasPrefix("PaneUpdate-") || u.lastPathComponent.hasPrefix("pane-dl-") {
+            let age = (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate).map { Date().timeIntervalSince($0) } ?? .infinity
+            if age > 600 { try? FileManager.default.removeItem(at: u) }
+        }
+    }
+
     // MARK: Download with progress
 
     private func download(_ url: URL, into dir: URL) async throws -> URL {
         let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 30        // a stalled connection ends instead of waiting for ever
+        cfg.timeoutIntervalForResource = 20 * 60
         let s = URLSession(configuration: cfg, delegate: self, delegateQueue: .main)
         session = s
         defer { s.finishTasksAndInvalidate(); session = nil }
