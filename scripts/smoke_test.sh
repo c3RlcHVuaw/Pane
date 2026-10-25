@@ -44,6 +44,10 @@ grep -q "cc=4242424242424242|ccn=ANNA SMITH|mm=03|yy=2029" "$OUT/autofill-autofi
 run spell 12 PANE_DEBUG_X=45 PANE_DEBUG_RIGHTCLICK=spell PANE_DEBUG_CONTEXT_LOG="$OUT/spell.txt"
 grep -q "misspelled=превет" "$OUT/spell.txt" 2>/dev/null && pass "Russian spell check suggests corrections" || fail "Russian spell check"
 
+echo "Back after the first page"
+run back 14 PANE_DEBUG_BACK=1
+grep -q "canGoBack=true afterBack=http://127.0.0.1:8765/form.html" "$OUT/back-back.txt" 2>/dev/null && pass "Back returns to the previous page" || fail "Back after a new tab's first page"
+
 echo "Features"
 run features 30 PANE_DEBUG_FEATURES=1
 F="$OUT/features-features.txt"

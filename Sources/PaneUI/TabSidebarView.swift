@@ -16,6 +16,8 @@ protocol TabCommands: AnyObject {
     func reopenClosed()
     func sleepInactive()
     func saveSession()
+    func organizeWithAI()
+    var canOrganizeWithAI: Bool { get }
     var savedSessions: [(id: UUID, name: String, count: Int)] { get }
     func openSession(_ id: UUID)
     func deleteSession(_ id: UUID)
@@ -586,9 +588,11 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         if hasSleepable || !dups.isEmpty { m.addItem(.separator()) }
         if hasSleepable { m.addItem(item("Put Other Tabs to Sleep", #selector(sleepInactiveTabs))) }
         if !dups.isEmpty { m.addItem(item("Close Duplicate Tabs", #selector(closeDuplicateTabs))) }
+        if commands?.canOrganizeWithAI == true, store.ungrouped.count >= 3 { m.addItem(item("Organize Tabs with AI", #selector(organizeAI))) }
         if !sitesToGroup().isEmpty { m.addItem(item("Group Tabs by Site", #selector(groupBySite))) }
         return m
     }
+    @objc private func organizeAI() { commands?.organizeWithAI() }
     @objc private func saveSessionClicked() { commands?.saveSession() }
     @objc private func openSessionClicked(_ s: NSMenuItem) { if let id = s.representedObject as? UUID { commands?.openSession(id) } }
     @objc private func deleteSessionClicked(_ s: NSMenuItem) { if let id = s.representedObject as? UUID { commands?.deleteSession(id) } }

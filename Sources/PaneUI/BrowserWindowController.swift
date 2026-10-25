@@ -230,7 +230,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         defer { showWhatsNewIfNeeded(); startWatching(); installSwipeNavigation() }
         if syncScheduler != nil { vault.onChange = { [weak self] in self?.syncScheduler?.scheduleSync() } }
         engine.setContentBlocking(settings.blockAds)
-        engine.setDocumentStartScript(NotificationShim.script(decisions: notificationDecisions))
+        applyStartScript()
         let restored = sessionURL.map { store.load(from: $0) } ?? false
         if !restored { store.addTab(url: settings.newTabURL) }
         else if settings.startup == .newTab { store.addTab(url: settings.newTabURL) }
@@ -407,6 +407,19 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             log += "round \(r): tabs=\(store.tabs.count) live=\(live.count)\n"
         }
         return log + "survived"
+    }
+
+    /// Debug aid: Back after the first page of a new tab must return to the previous page, not to a blank one.
+    public func debugBack() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        navigate("http://127.0.0.1:8765/ads.html")
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let canBackAtFirst = navState[store.activeTabID ?? UUID()]?.canGoBack ?? false
+        goBack()
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let url = store.activeTabID.flatMap { store.tab($0)?.url } ?? ""
+        return "canGoBack=\(canBackAtFirst) afterBack=\(url)"
     }
 
     /// Debug aid: do groups survive a workspace round trip, the sidebar and a save to disk?
@@ -1736,7 +1749,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         guard activeLive != nil, let url = store.activeTabID.flatMap({ store.tab($0)?.url }), url.hasPrefix("http") || url.hasPrefix("file") else { NSSound.beep(); return }
         Task { @MainActor in
             var clip: [String: Any]?
-            if let m = Self.parseObject(await devToolsRaw("Page.getLayoutMetrics", nil)),
+            if let m = Self.parseObject(await devToolsRaw("Page.getLayoutMetrics", "{}")),
                let size = (m["cssContentSize"] ?? (m["result"] as? [String: Any])?["cssContentSize"]) as? [String: Any],
                let w = size["width"] as? Double, let h = size["height"] as? Double {
                 clip = ["x": 0, "y": 0, "width": w, "height": min(h, 16000), "scale": 1]
@@ -1906,12 +1919,18 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     // MARK: Site notifications
 
+    /// What every page runs before its own scripts: the notification shim, plus mouse gestures when they are on.
+    private func applyStartScript(_ decisions: [String: String]? = nil) {
+        engine.setDocumentStartScript(NotificationShim.script(decisions: decisions ?? notificationDecisions) + "")
+    }
+
+
     /// Which sites may show notifications ("granted" / "denied"), remembered across launches.
     public var notificationDecisions: [String: String] {
         get { UserDefaults.standard.dictionary(forKey: "notificationDecisions") as? [String: String] ?? [:] }
         set {
             UserDefaults.standard.set(newValue, forKey: "notificationDecisions")
-            engine.setDocumentStartScript(NotificationShim.script(decisions: newValue))
+            applyStartScript(newValue)
             let update = "window.__paneNotifDecisions = \(Self.jsonObject(newValue));"
             for l in live.values { Task { _ = try? await l.tab.devTools("Runtime.evaluate", params: Self.json(["expression": update])) } }
         }
@@ -1944,7 +1963,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                 self.answerNotificationRequest(decision, on: tab)
             }
         case "show":
-            guard notificationDecisions[origin] == "granted" else { return }
+            guard notificationDecisions[origin] == "granted", !inCall else { return }
             var recent = (lastNotifications[id] ?? []).filter { Date().timeIntervalSince($0) < 60 }
             guard recent.count < 6 else { return }   // a page can't flood the notification centre
             recent.append(Date()); lastNotifications[id] = recent
@@ -2529,6 +2548,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         if settings.sidebarTint, let id = store.activeTabID, let icon = favicons[id] ?? store.tab(id).flatMap({ faviconCache.image(for: $0.url) }) {
             color = DominantColor.of(icon)
         }
+        if isPrivate { glass.tintColor = NSColor.systemPurple.withAlphaComponent(0.32); return }
         let target = color?.withAlphaComponent(0.28) ?? settings.theme.nsColor?.withAlphaComponent(0.22)
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { glass.tintColor = target; return }
         let t = CATransition(); t.type = .fade; t.duration = 0.5
@@ -2616,6 +2636,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         destroyLive(id)
         favicons[id] = nil
         tabText[id] = nil
+        callTabs.remove(id)
         if wasActive { showActive() }
     }
 
@@ -2647,6 +2668,82 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     func openURL(_ url: String, inGroup group: UUID?) {
         store.addTab(url: url, groupID: group)
         showActive()
+    }
+
+    var canOrganizeWithAI: Bool { assistantSession.isConfigured && !isPrivate }
+
+    /// One question to the assistant, answered in full (no chat history involved).
+    private func askOnce(system: String, _ user: String) async -> String? {
+        guard let provider = assistantSession.makeProvider() else { return nil }
+        var out = ""
+        do { for try await chunk in provider.stream(system: system, messages: [LLMMessage(role: "user", content: user)]) { out += chunk } } catch { return nil }
+        return out
+    }
+
+    /// Asks the assistant to sort the loose tabs into named groups by topic.
+    func organizeWithAI() {
+        let loose = Array(store.ungrouped.filter { !$0.url.isEmpty }.prefix(60))
+        guard loose.count >= 3 else { return }
+        ToastView.show(in: webHost, message: "Sorting your tabs…", symbol: "sparkles", duration: 8)
+        let list = loose.enumerated().map { "\($0.offset + 1). \($0.element.displayTitle) — \(URL(string: $0.element.url)?.host ?? "")" }.joined(separator: "\n")
+        let ru = AppLanguage.current.hasPrefix("ru")
+        Task { @MainActor in
+            let system = "You sort browser tabs into groups by topic. Reply with JSON only: {\"groups\":[{\"name\":\"…\",\"tabs\":[1,2]}]}. Use 2 to 6 groups, short names (1-3 words, \(ru ? "in Russian" : "in English")), only group tabs that clearly belong together (at least 2 per group), leave the rest out."
+            guard let reply = await askOnce(system: system, list), let start = reply.firstIndex(of: "{"), let end = reply.lastIndex(of: "}"),
+                  let data = String(reply[start...end]).data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let groups = o["groups"] as? [[String: Any]] else {
+                ToastView.show(in: webHost, message: "Could not sort the tabs", symbol: "exclamationmark.triangle", duration: 3); return
+            }
+            var made = 0
+            for g in groups {
+                guard let name = g["name"] as? String, let idx = g["tabs"] as? [Int] else { continue }
+                let ids = idx.compactMap { $0 >= 1 && $0 <= loose.count ? loose[$0 - 1].id : nil }.filter { store.tab($0)?.groupID == nil }
+                guard ids.count >= 2 else { continue }
+                let gid = store.createGroup(name: String(name.prefix(30)), colorIndex: store.groups.count)
+                for id in ids { store.move(id, toGroup: gid) }
+                made += 1
+            }
+            ToastView.show(in: webHost, message: made > 0 ? "Tabs sorted into groups" : "Nothing to group", symbol: "sparkles", duration: 3)
+        }
+    }
+
+    /// Fetches a linked page without cookies, boils it down to text and has the assistant summarize it.
+    func summarizeLink(_ link: String, at point: NSPoint) {
+        guard assistantSession.isConfigured, let url = URL(string: link), url.scheme == "http" || url.scheme == "https" else { return }
+        ToastView.show(in: webHost, message: "Reading the link…", symbol: "sparkles", duration: 10)
+        let ru = AppLanguage.current.hasPrefix("ru")
+        Task { @MainActor in
+            var req = URLRequest(url: url, timeoutInterval: 12)
+            req.httpShouldHandleCookies = false
+            req.setValue("text/html", forHTTPHeaderField: "Accept")
+            guard let (data, _) = try? await URLSession.shared.data(for: req), let html = String(data: data.prefix(600_000), encoding: .utf8) ?? String(data: data.prefix(600_000), encoding: .isoLatin1) else {
+                ToastView.show(in: webHost, message: "Could not open the link", symbol: "exclamationmark.triangle", duration: 3); return
+            }
+            var text = html
+            for pat in ["<script[\\s\\S]*?</script>", "<style[\\s\\S]*?</style>", "<!--[\\s\\S]*?-->", "<[^>]+>"] {
+                text = text.replacingOccurrences(of: pat, with: " ", options: [.regularExpression, .caseInsensitive])
+            }
+            text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+            guard text.count > 80 else { ToastView.show(in: webHost, message: "Nothing to summarize there", symbol: "doc", duration: 3); return }
+            let system = "Summarize the web page text in 2-3 short sentences: what it is and why it might matter. \(ru ? "Answer in Russian." : "Answer in the user's language.") No preamble."
+            guard let summary = await askOnce(system: system, String(text.prefix(12_000))) else {
+                ToastView.show(in: webHost, message: "The assistant did not answer", symbol: "exclamationmark.triangle", duration: 3); return
+            }
+            showTextPopover(summary.trimmingCharacters(in: .whitespacesAndNewlines), title: url.host ?? link, at: point)
+        }
+    }
+
+    private func showTextPopover(_ text: String, title: String, at point: NSPoint) {
+        guard let container = activeLive?.container else { return }
+        let pop = NSPopover(); pop.behavior = .transient
+        let head = NSTextField(labelWithString: title); head.font = .systemFont(ofSize: 11, weight: .semibold); head.textColor = .secondaryLabelColor
+        let body = NSTextField(wrappingLabelWithString: text); body.font = .systemFont(ofSize: 13); body.isSelectable = true
+        body.preferredMaxLayoutWidth = 300
+        let stack = NSStackView(views: [head, body]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14)
+        let vc = NSViewController(); vc.view = stack
+        pop.contentViewController = vc
+        pop.show(relativeTo: NSRect(x: point.x, y: point.y, width: 1, height: 1), of: container, preferredEdge: .minY)
     }
 
     var savedSessions: [(id: UUID, name: String, count: Int)] { SessionStore.shared.sessions.map { ($0.id, $0.name, $0.pages.count) } }
@@ -3114,14 +3211,14 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     private func presentContextMenu(_ info: ContextMenuInfo, tab: BrowserTab, id: UUID, at point: NSPoint, spell: PageSpell.Word?) {
         guard let l = live[id] else { return }
-        let menu = contextMenu(for: info, tab: tab, id: id, spell: spell)
+        let menu = contextMenu(for: info, tab: tab, id: id, spell: spell, at: point)
         if let log = ProcessInfo.processInfo.environment["PANE_DEBUG_CONTEXT_LOG"] {  // test runs record the menu instead of showing it
             try? ("link=\(info.link) media=\(String(describing: info.media)) editable=\(info.isEditable) misspelled=\(spell?.text ?? info.misspelledWord) suggestions=\((spell?.suggestions ?? info.suggestions).prefix(3)) items=\(menu.items.count)").write(toFile: log, atomically: true, encoding: .utf8); return
         }
         menu.popUp(positioning: nil, at: point, in: l.container)
     }
 
-    func contextMenu(for info: ContextMenuInfo, tab: BrowserTab, id: UUID, spell: PageSpell.Word? = nil) -> NSMenu {
+    func contextMenu(for info: ContextMenuInfo, tab: BrowserTab, id: UUID, spell: PageSpell.Word? = nil, at point: NSPoint = .zero) -> NSMenu {
         let page = store.tab(id)?.url ?? info.pageURL
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -3147,6 +3244,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             add(tr("Open Link in New Tab"), "plus.square.on.square") { [weak self] in self?.open(info.link, newTab: true) }
             add(tr("Open Link in Background Tab"), "square.on.square") { [weak self] in self?.store.addTab(url: info.link, activate: false) }
             sep()
+            if assistantSession.isConfigured { add(tr("Summarize Link"), "sparkles") { [weak self] in self?.summarizeLink(info.link, at: point) } }
             add(tr("Copy Link Address"), "link") { copyText(info.link) }
             if !info.linkText.isEmpty { add(tr("Copy Link Text"), "textformat") { copyText(info.linkText) } }
             add(tr("Add Link to Bookmarks"), "star") { [weak self] in
@@ -3272,7 +3370,17 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     private var grantedPermissions: [String: Bool] = [:]   // "origin|kind" → decision, for this session
 
-    public func tab(_ tab: BrowserTab, requestsPermission origin: String, kinds: [String], decide: @escaping @MainActor (Bool) -> Void) {
+    /// Tabs that are on a call (they were given the camera or microphone). Site notifications stay quiet meanwhile.
+    private var callTabs: Set<UUID> = []
+    private var inCall: Bool { settings.quietDuringCalls && !callTabs.isEmpty }
+
+    public func tab(_ tab: BrowserTab, requestsPermission origin: String, kinds: [String], decide original: @escaping @MainActor (Bool) -> Void) {
+        let callID = tabIDs[ObjectIdentifier(tab as AnyObject)]
+        let usesMedia = kinds.contains("camera") || kinds.contains("microphone")
+        let decide: @MainActor (Bool) -> Void = { [weak self] allow in
+            if allow, usesMedia, let callID { self?.callTabs.insert(callID) }
+            original(allow)
+        }
         guard let window, !kinds.isEmpty else { decide(false); return }
         if let forced = ProcessInfo.processInfo.environment["PANE_DEBUG_PERMISSIONS"] { decide(forced == "allow"); return }  // test runs answer without a dialog
         let host = URL(string: origin)?.host ?? origin

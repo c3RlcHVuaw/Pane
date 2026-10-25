@@ -146,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     if let n = env["PANE_DEBUG_STRESS_ALL"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugStressEverything(rounds: n) ?? "").write(toFile: prefix + "-stress.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_SIDEBAR"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugSidebarStress(steps: n) ?? "").write(toFile: prefix + "-sidebar.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_GROUPS"] != nil { Task { @MainActor in try? (await win?.debugGroups() ?? "").write(toFile: prefix + "-groups.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_BACK"] != nil { Task { @MainActor in try? (await win?.debugBack() ?? "").write(toFile: prefix + "-back.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_AUTOFILL"] != nil { Task { @MainActor in try? (await win?.debugAutofill() ?? "").write(toFile: prefix + "-autofill.txt", atomically: true, encoding: .utf8) } }
                     if let l = env["PANE_DEBUG_LONG"] { win?.debugLongStrings(Set(l.split(separator: ",").map(String.init))) }
                     if env["PANE_DEBUG_FEATURES"] != nil { Task { @MainActor in try? (await win?.debugFeatures() ?? "").write(toFile: prefix + "-features.txt", atomically: true, encoding: .utf8) } }

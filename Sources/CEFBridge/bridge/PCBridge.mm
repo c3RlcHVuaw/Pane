@@ -456,6 +456,16 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
   return self;
 }
 
+// Opens the page in place of the empty first document, so Back doesn't lead to a blank page.
+- (void)openReplacingBlank:(NSString *)url {
+  if (!_browser) return;
+  NSData *json = [NSJSONSerialization dataWithJSONObject:@[url] options:0 error:nil];
+  NSString *arr = json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : nil;
+  if (!arr) { _browser->GetMainFrame()->LoadURL(url.UTF8String); return; }
+  NSString *code = [NSString stringWithFormat:@"location.replace(%@[0])", arr];
+  _browser->GetMainFrame()->ExecuteJavaScript(code.UTF8String, "about:blank", 0);
+}
+
 - (NSView *)view { return _view; }
 
 - (void)didCreate:(CefRefPtr<CefBrowser>)b {
@@ -473,7 +483,7 @@ void PCDevToolsObserver::OnDevToolsMethodResult(CefRefPtr<CefBrowser>, int messa
     [self devToolsMethod:@"Page.enable" params:nil completion:^(NSString *, NSString *) {}];
     [self devToolsMethod:@"Page.addScriptToEvaluateOnNewDocument" params:[[NSString alloc] initWithData:add encoding:NSUTF8StringEncoding] completion:^(NSString *, NSString *) {
       PCBrowser *me = weakSelf;
-      if (me && me->_pendingURL && me->_browser) { NSString *u = me->_pendingURL; me->_pendingURL = nil; me->_browser->GetMainFrame()->LoadURL(u.UTF8String); }
+      if (me && me->_pendingURL && me->_browser) { NSString *u = me->_pendingURL; me->_pendingURL = nil; [me openReplacingBlank:u]; }
     }];
     [self devToolsMethod:@"Runtime.evaluate" params:[[NSString alloc] initWithData:now encoding:NSUTF8StringEncoding] completion:^(NSString *, NSString *) {}];
   } else if (_pendingURL) { NSString *u = _pendingURL; _pendingURL = nil; b->GetMainFrame()->LoadURL(u.UTF8String); }
