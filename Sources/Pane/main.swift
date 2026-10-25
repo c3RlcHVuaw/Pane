@@ -81,7 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         SessionStore.shared.configure(file: dataRoot.appendingPathComponent("sessions.json"))
         AutofillStore.shared.configure(file: dataRoot.appendingPathComponent("autofill.json"))
         let extensionsRoot = dataRoot.appendingPathComponent("Extensions")
+        let safeMode = ExtensionStore.beginStartup(root: extensionsRoot)
         ExtensionStore.shared.configure(root: extensionsRoot)
+        ExtensionStore.shared.noteSafeMode(safeMode)
         guard let engine = CEFEngine(cacheDirectory: dataRoot, languages: languages, extensionPaths: ExtensionStore.enabledPaths(root: extensionsRoot)) else {
             let alert = NSAlert()
             alert.messageText = tr("Could not start the Chromium engine")
@@ -91,6 +93,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         self.engine = engine
+        // The start only counts as finished once the app has been responsive for a few seconds with its extensions on.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { ExtensionStore.endStartup(root: extensionsRoot) }
+        if safeMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let alert = NSAlert()
+                alert.messageText = tr("Extensions were turned off")
+                alert.informativeText = tr("Pane did not start properly the last time, so all extensions were switched off. You can turn them back on one by one in Settings → Extensions.")
+                alert.runModal()
+            }
+        }
         // Did the last run end badly? If so, offer to send an anonymous report once the window is up.
         let testRun = env["PANE_OFFSCREEN"] != nil || env["PANE_SUPPORT_DIR"] != nil
         if !testRun, let previous = CrashReporter.markLaunch(in: dataRoot), let summary = CrashReporter.latestSummary(after: previous) {

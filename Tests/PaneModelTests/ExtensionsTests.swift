@@ -59,3 +59,22 @@ final class ExtensionIDTests: XCTestCase {
         XCTAssertEqual(ExtensionStore.chromeID(forFolder: "/private/tmp/sbx/s/Extensions/t"), "jlopimbdbcocbljhcnfbhckhhjgdmlda")
     }
 }
+
+
+final class ExtensionSafeModeTests: XCTestCase {
+    func testStalledStartDisablesExtensions() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ext-\(UUID().uuidString)")
+        let ext = root.appendingPathComponent("good")
+        try FileManager.default.createDirectory(at: ext, withIntermediateDirectories: true)
+        try Data(#"{"manifest_version":3,"name":"A","version":"1"}"#.utf8).write(to: ext.appendingPathComponent("manifest.json"))
+        let bad = root.appendingPathComponent("bad")
+        try FileManager.default.createDirectory(at: bad, withIntermediateDirectories: true)
+        try Data("{ nope".utf8).write(to: bad.appendingPathComponent("manifest.json"))
+        XCTAssertEqual(ExtensionStore.enabledPaths(root: root).map { ($0 as NSString).lastPathComponent }, ["good"])        // broken ones never reach the engine
+        XCTAssertFalse(ExtensionStore.beginStartup(root: root))                       // first start: nothing wrong
+        XCTAssertTrue(ExtensionStore.beginStartup(root: root))                        // the marker survived: the last start stalled
+        XCTAssertEqual(ExtensionStore.enabledPaths(root: root), [])                   // so everything is off
+        ExtensionStore.endStartup(root: root)
+        XCTAssertFalse(ExtensionStore.beginStartup(root: root))
+    }
+}

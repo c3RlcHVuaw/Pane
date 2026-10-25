@@ -39,6 +39,31 @@ public final class ExtensionStore: ObservableObject {
 
     public var needsRestart: Bool { Set(items.filter(\.enabled).map(\.path)) != Set(launchPaths) }
 
+    /// True when the last start-up never finished with extensions on, so they were all switched off.
+    public private(set) var safeModeTriggered = false
+
+    /// Called before the engine starts. A marker left from a start that never completed means an extension probably stalled it.
+    public nonisolated static func beginStartup(root: URL) -> Bool {
+        let marker = root.appendingPathComponent(".starting")
+        var tripped = false
+        if FileManager.default.fileExists(atPath: marker.path) {
+            let all = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+            let names = all.filter { isValidExtension($0) }.map(\.lastPathComponent)
+            if !names.isEmpty {
+                let d = try? JSONSerialization.data(withJSONObject: ["disabled": names])
+                try? d?.write(to: stateURL(root), options: .atomic)
+                tripped = true
+            }
+        }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: marker.path, contents: Data())
+        return tripped
+    }
+
+    public nonisolated static func endStartup(root: URL) { try? FileManager.default.removeItem(at: root.appendingPathComponent(".starting")) }
+
+    public func noteSafeMode(_ tripped: Bool) { safeModeTriggered = tripped }
+
     public func configure(root: URL) {
         self.root = root
         launchPaths = Self.enabledPaths(root: root)
@@ -58,8 +83,15 @@ public final class ExtensionStore: ObservableObject {
     public nonisolated static func enabledPaths(root: URL) -> [String] {
         let off = disabled(root)
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        return dirs.filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path) && !off.contains($0.lastPathComponent) }
-            .map(\.path).sorted()
+        return dirs.filter { isValidExtension($0) && !off.contains($0.lastPathComponent) }.map(\.path).sorted()
+    }
+
+    /// A folder the engine can load: a readable manifest with a version. A broken one must never reach the engine (it can stall start-up).
+    public nonisolated static func isValidExtension(_ folder: URL) -> Bool {
+        guard let d = try? Data(contentsOf: folder.appendingPathComponent("manifest.json")),
+              let m = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let v = m["manifest_version"] as? Int, (2...3).contains(v), m["name"] is String, m["version"] is String else { return false }
+        return true
     }
 
     public nonisolated static func read(folder: URL, enabled: Bool) -> InstalledExtension? {

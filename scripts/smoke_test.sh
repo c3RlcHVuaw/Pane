@@ -69,6 +69,13 @@ grep -q "endless script: ui ticks in 1s=[5-9]\|ui ticks in 1s=[1-9][0-9]" "$C" 2
 grep -q "renderer crash: overlay=true" "$C" 2>/dev/null && pass "a crashed page shows the reload card" || fail "renderer crash overlay"
 grep -q "survived" "$C" 2>/dev/null && pass "popups, huge page, navigation and tab storms survived" || fail "chaos run did not finish"
 
+echo "Damaged data files"
+rm -rf "$OUT/support"; mkdir -p "$OUT/support/Extensions/bad"
+for f in session.json bookmarks.json history.json workspaces.json autofill.json sessions.json downloads.json notes.json logins.json watches.json; do printf '{"tabs": [ {{{ garbage \xff\xfe' > "$OUT/support/$f"; done
+echo '{"manifest_version":3' > "$OUT/support/Extensions/bad/manifest.json"
+env PANE_ONSCREEN_TEST=1 PANE_ONSCREEN_FRONT=1 PANE_SUPPORT_DIR="$OUT/support" PANE_SNAPSHOT="$OUT/corrupt" PANE_SNAPSHOT_DELAY=8 PANE_DEBUG_NO_NOTIFY=1 "$APP" >"$OUT/corrupt.log" 2>&1
+[ -f "$OUT/corrupt-main.png" ] && pass "starts even with every data file damaged and a broken extension" || fail "start-up with damaged files"
+
 echo "Back after the first page"
 run back 14 PANE_DEBUG_BACK=1
 grep -q "canGoBack=true afterBack=http://127.0.0.1:8765/form.html" "$OUT/back-back.txt" 2>/dev/null && pass "Back returns to the previous page" || fail "Back after a new tab's first page"

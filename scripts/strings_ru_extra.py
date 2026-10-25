@@ -351,4 +351,5 @@ EXTRA = {
 "Underline spelling mistakes": "Подчёркивать ошибки в словах", "Reload a page after changing this.": "После изменения обновите страницу.", "Extensions": "Расширения",
 "A page keeps showing dialogs — blocked": "Страница без конца показывает окна — заблокировано", "Leave this page?": "Покинуть страницу?", "This page says": "Страница сообщает",
 "“%@” says": "«%@» сообщает", "Changes you made may not be saved.": "Внесённые изменения могут не сохраниться.", "Leave": "Покинуть", "Stay": "Остаться",
+"Extensions were turned off": "Расширения отключены", "Pane did not start properly the last time, so all extensions were switched off. You can turn them back on one by one in Settings → Extensions.": "В прошлый раз Pane не смог нормально запуститься, поэтому все расширения выключены. Включите их по одному в Настройках → Расширения.",
 }
