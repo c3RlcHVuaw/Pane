@@ -432,6 +432,9 @@ def write():
     with open(os.path.join(out, "InfoPlist.strings"), "w", encoding="utf-8") as f:
         f.write('"NSMicrophoneUsageDescription" = "Pane использует микрофон для диктовки в ассистенте и когда этого просит страница.";\n')
         f.write('"NSSpeechRecognitionUsageDescription" = "Pane превращает вашу речь в текст для ассистента.";\n')
+        f.write('"NSBluetoothAlwaysUsageDescription" = "Сайты могут использовать телефон или ключ безопасности по Bluetooth для входа (например, с ключом доступа).";\n')
+        f.write('"NSBluetoothPeripheralUsageDescription" = "Сайты могут использовать телефон или ключ безопасности по Bluetooth для входа (например, с ключом доступа).";\n')
+        f.write('"NSLocalNetworkUsageDescription" = "Страницы могут обращаться к устройствам в вашей локальной сети, например для звонков и принтеров.";\n')
     print("wrote", len(RU), "strings")
 
 

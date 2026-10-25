@@ -175,6 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     if env["PANE_DEBUG_CHAOS"] != nil { Task { @MainActor in try? (await win?.debugChaos() ?? "").write(toFile: prefix + "-chaos.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_EXTPOPUP"] != nil { Task { @MainActor in try? (await win?.debugExtensionPopup() ?? "").write(toFile: prefix + "-extpopup.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_SPELLUL"] != nil { Task { @MainActor in try? (await win?.debugSpellUnderline() ?? "").write(toFile: prefix + "-spellul.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_GESTURE"] != nil { Task { @MainActor in try? (await win?.debugGesture() ?? "").write(toFile: prefix + "-gesture.txt", atomically: true, encoding: .utf8) } }
+                    if env["PANE_DEBUG_ADDROFFER"] != nil { Task { @MainActor in try? (await win?.debugAddressOffer() ?? "").write(toFile: prefix + "-addroffer.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_BACK"] != nil { Task { @MainActor in try? (await win?.debugBack() ?? "").write(toFile: prefix + "-back.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_AUTOFILL"] != nil { Task { @MainActor in try? (await win?.debugAutofill() ?? "").write(toFile: prefix + "-autofill.txt", atomically: true, encoding: .utf8) } }
                     if let l = env["PANE_DEBUG_LONG"] { win?.debugLongStrings(Set(l.split(separator: ",").map(String.init))) }

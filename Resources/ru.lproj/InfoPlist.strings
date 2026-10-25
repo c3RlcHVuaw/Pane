@@ -1,2 +1,5 @@
 "NSMicrophoneUsageDescription" = "Pane использует микрофон для диктовки в ассистенте и когда этого просит страница.";
 "NSSpeechRecognitionUsageDescription" = "Pane превращает вашу речь в текст для ассистента.";
+"NSBluetoothAlwaysUsageDescription" = "Сайты могут использовать телефон или ключ безопасности по Bluetooth для входа (например, с ключом доступа).";
+"NSBluetoothPeripheralUsageDescription" = "Сайты могут использовать телефон или ключ безопасности по Bluetooth для входа (например, с ключом доступа).";
+"NSLocalNetworkUsageDescription" = "Страницы могут обращаться к устройствам в вашей локальной сети, например для звонков и принтеров.";

@@ -46,7 +46,7 @@ plist "Pane" "com.pane.browser" "Pane" "<key>NSPrincipalClass</key><string>PCApp
 <dict><key>CFBundleTypeName</key><string>HTML document</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSItemContentTypes</key><array><string>public.html</string><string>public.xhtml</string></array></dict>
 <dict><key>CFBundleTypeName</key><string>PDF document</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array></dict>
 </array>
-<key>NSMicrophoneUsageDescription</key><string>Pane uses the microphone for dictation in the assistant, and when a web page asks to.</string><key>NSSpeechRecognitionUsageDescription</key><string>Pane turns your speech into text for the assistant.</string>" > "$APP/Contents/Info.plist"
+<key>NSMicrophoneUsageDescription</key><string>Pane uses the microphone for dictation in the assistant, and when a web page asks to.</string><key>NSSpeechRecognitionUsageDescription</key><string>Pane turns your speech into text for the assistant.</string><key>NSBluetoothAlwaysUsageDescription</key><string>Websites can use your phone or a security key over Bluetooth to sign you in (for example with a passkey).</string><key>NSBluetoothPeripheralUsageDescription</key><string>Websites can use your phone or a security key over Bluetooth to sign you in (for example with a passkey).</string><key>NSLocalNetworkUsageDescription</key><string>Web pages can talk to devices on your local network, such as calls and printers.</string>" > "$APP/Contents/Info.plist"
 cp "$BIN/Pane" "$APP/Contents/MacOS/Pane"
 mkdir -p "$APP/Contents/Resources"
 [ -f Resources/Pane.icns ] || ./scripts/make_icon.sh

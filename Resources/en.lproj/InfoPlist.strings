@@ -1,2 +1,5 @@
 "NSMicrophoneUsageDescription" = "Pane uses the microphone for dictation in the assistant, and when a web page asks to.";
 "NSSpeechRecognitionUsageDescription" = "Pane turns your speech into text for the assistant.";
+"NSBluetoothAlwaysUsageDescription" = "Websites can use your phone or a security key over Bluetooth to sign you in (for example with a passkey).";
+"NSBluetoothPeripheralUsageDescription" = "Websites can use your phone or a security key over Bluetooth to sign you in (for example with a passkey).";
+"NSLocalNetworkUsageDescription" = "Web pages can talk to devices on your local network, such as calls and printers.";

@@ -76,6 +76,20 @@ echo '{"manifest_version":3' > "$OUT/support/Extensions/bad/manifest.json"
 env PANE_ONSCREEN_TEST=1 PANE_ONSCREEN_FRONT=1 PANE_SUPPORT_DIR="$OUT/support" PANE_SNAPSHOT="$OUT/corrupt" PANE_SNAPSHOT_DELAY=8 PANE_DEBUG_NO_NOTIFY=1 "$APP" >"$OUT/corrupt.log" 2>&1
 [ -f "$OUT/corrupt-main.png" ] && pass "starts even with every data file damaged and a broken extension" || fail "start-up with damaged files"
 
+echo "Offer to save an address"
+run addroffer 12 PANE_DEBUG_ADDROFFER=1
+grep -q "offered=Boris Test|9 Elm Road|Leeds" "$OUT/addroffer-addroffer.txt" 2>/dev/null && pass "a sent address form offers to save it" || fail "address save offer"
+
+echo "Privacy descriptions (macOS kills an app that asks without one)"
+PLIST="${1:-build/Pane.app}/Contents/Info.plist"
+for k in NSBluetoothAlwaysUsageDescription NSCameraUsageDescription NSMicrophoneUsageDescription NSLocationWhenInUseUsageDescription NSLocalNetworkUsageDescription; do
+  /usr/libexec/PlistBuddy -c "Print :$k" "$PLIST" >/dev/null 2>&1 && pass "$k" || fail "$k missing in Info.plist"
+done
+
+echo "Mouse gestures"
+run gesture 14 PANE_DEBUG_GESTURE=1
+grep -q "after=http://127.0.0.1:8765/form.html" "$OUT/gesture-gesture.txt" 2>/dev/null && pass "⌥-drag to the left goes back" || fail "mouse gesture"
+
 echo "Back after the first page"
 run back 14 PANE_DEBUG_BACK=1
 grep -q "canGoBack=true afterBack=http://127.0.0.1:8765/form.html" "$OUT/back-back.txt" 2>/dev/null && pass "Back returns to the previous page" || fail "Back after a new tab's first page"

@@ -72,6 +72,7 @@ public final class AppSettings: ObservableObject {
     @Published public var webSuggestions: Bool { didSet { save("webSuggestions", webSuggestions) } }
     /// Two-finger swipe goes back and forward.
     @Published public var swipeNavigation: Bool { didSet { save("swipeNavigation", swipeNavigation) } }
+    @Published public var mouseGestures: Bool { didSet { save("mouseGestures", mouseGestures) } }
     @Published public var spellUnderline: Bool { didSet { save("spellUnderline", spellUnderline) } }
     @Published public var quietDuringCalls: Bool { didSet { save("quietDuringCalls", quietDuringCalls) } }
     @Published public var focusSites: String { didSet { save("focusSites", focusSites) } }
@@ -110,6 +111,7 @@ public final class AppSettings: ObservableObject {
         webSuggestions = defaults.object(forKey: "webSuggestions") as? Bool ?? true
         swipeNavigation = defaults.object(forKey: "swipeNavigation") as? Bool ?? true
         appIcon = defaults.string(forKey: "appIcon") ?? "original"
+        mouseGestures = defaults.object(forKey: "mouseGestures") as? Bool ?? true
         spellUnderline = defaults.object(forKey: "spellUnderline") as? Bool ?? true
         quietDuringCalls = defaults.object(forKey: "quietDuringCalls") as? Bool ?? true
         focusSites = defaults.string(forKey: "focusSites") ?? FocusSites.defaults

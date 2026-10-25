@@ -128,6 +128,24 @@ public enum AutofillScripts {
         const r = el.getBoundingClientRect();
         console.log('__pane-notif:' + JSON.stringify({ k: 'autofill', kind, x: r.left, y: r.bottom, w: r.width, h: r.height }));
       }, true);
+      // After an address form is sent, offer to keep the address. Forms with passwords or card fields are never read.
+      const rules = [['email', /^email$|e-?mail|почт/i], ['tel', /^tel|phone|mobile|телефон/i], ['street', /address-line1|street|address|адрес|улиц/i],
+                     ['city', /address-level2|city|town|город/i], ['region', /address-level1|state|province|region|област/i],
+                     ['zip', /postal|zip|индекс/i], ['country', /country|страна/i], ['name', /^name$|full.?name|given-name|first.?name|фио|^имя/i]];
+      addEventListener('submit', e => {
+        const form = e.target;
+        if (!form || !form.querySelectorAll) return;
+        const inputs = [...form.querySelectorAll('input,select,textarea')];
+        if (inputs.some(i => i.type === 'password' || /^cc-/.test(i.getAttribute('autocomplete') || '') || /card.?n(um|o)|cvc|cvv|ccnum/i.test(i.name + ' ' + i.id))) return;
+        const out = {};
+        for (const i of inputs) {
+          if (!i.value || /^(hidden|checkbox|radio|submit|button|file)$/.test(i.type)) continue;
+          const key = [i.getAttribute('autocomplete') || '', i.name, i.id, i.placeholder].join(' ');
+          const hit = rules.find(r => r[1].test(key));
+          if (hit && !out[hit[0]]) out[hit[0]] = i.tagName === 'SELECT' ? i.options[i.selectedIndex].text : i.value.slice(0, 120);
+        }
+        if ((out.street || out.city) && (out.name || out.email) && Object.keys(out).length >= 3) console.log('__pane-notif:' + JSON.stringify({ k: 'addrsave', a: out }));
+      }, true);
     })();
     """
 

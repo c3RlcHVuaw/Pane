@@ -287,7 +287,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         case "agentConfirm": agent.confirmImportantActions = settings.agentConfirm; assistantModel?.autoApprove = !settings.agentConfirm
         case "agentEnabled": refreshAssistantModel()
         case "blockAds": engine.setContentBlocking(settings.blockAds)
-        case "spellUnderline": applyStartScript()
+        case "spellUnderline", "mouseGestures": applyStartScript()
         case "sidebarTint": updateSidebarTint()
         case "theme": applyTheme()
         case "agentPrivate": assistantModel?.agentPrivate = settings.agentPrivate; if !settings.agentPrivate { closeAgentPrivateTab() }
@@ -495,6 +495,34 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         out += "tab storm: tabs=\(store.tabs.count) live=\(live.count)\n"
         return out + "survived"
+    }
+
+    /// Debug aid: sending an address form offers to save the address.
+    public func debugAddressOffer() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/ship.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        _ = try? await activeLive?.tab.devTools("Runtime.evaluate", params: Self.json(["expression": "document.getElementById('f').dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}))"]))
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        return "offered=\(debugOffered?.fullName ?? "nothing")|\(debugOffered?.street ?? "")|\(debugOffered?.city ?? "")"
+    }
+
+    /// Debug aid: ⌥ + drag to the left goes back.
+    public func debugGesture() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/form.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        navigate("http://127.0.0.1:8765/ads.html")
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        guard let tab = activeLive?.tab else { return "no tab" }
+        func mouse(_ type: String, _ x: Double, _ buttons: Int) async {
+            var p: [String: Any] = ["type": type, "x": x, "y": 200, "buttons": buttons, "modifiers": 1]
+            if type != "mouseMoved" { p["button"] = "left"; p["clickCount"] = 1 }
+            _ = try? await tab.devTools("Input.dispatchMouseEvent", params: Self.json(p))
+        }
+        await mouse("mousePressed", 400, 1)
+        for x in stride(from: 370.0, through: 190.0, by: -30) { await mouse("mouseMoved", x, 1); try? await Task.sleep(nanoseconds: 30_000_000) }
+        await mouse("mouseReleased", 190, 0)
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        return "after=" + (store.activeTabID.flatMap { store.tab($0)?.url } ?? "")
     }
 
     /// Debug aid: Back after the first page of a new tab must return to the previous page, not to a blank one.
@@ -2032,6 +2060,18 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     // MARK: AutoFill
 
+    /// After a form with an address was sent, a small note offers to keep it.
+    var debugOffered: AddressProfile?
+    private func offerToSaveAddress(_ f: [String: String]) {
+        var a = AddressProfile()
+        a.fullName = f["name"] ?? ""; a.email = f["email"] ?? ""; a.phone = f["tel"] ?? ""; a.street = f["street"] ?? ""
+        a.city = f["city"] ?? ""; a.region = f["region"] ?? ""; a.postalCode = f["zip"] ?? ""; a.country = f["country"] ?? ""
+        let known = AutofillStore.shared.addresses.contains { $0.street.lowercased() == a.street.lowercased() && $0.fullName.lowercased() == a.fullName.lowercased() }
+        guard !known, !a.isEmpty else { return }
+        debugOffered = a
+        ToastView.show(in: webHost, message: "Save this address for AutoFill?", symbol: "house.fill", actionTitle: "Save", duration: 9) { AutofillStore.shared.upsert(a) }
+    }
+
     private var autofillPopover: NSPopover?
 
     /// A small list under the field you clicked, like Chrome's: pick an address or card to fill the form.
@@ -2110,9 +2150,22 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     // MARK: Site notifications
 
+    private func performGesture(_ path: String, tab: BrowserTab, id: UUID) {
+        guard settings.mouseGestures, let action = MouseGestures.action(for: path), id == store.activeTabID else { return }
+        switch action {
+        case .back: tab.goBack()
+        case .forward: tab.goForward()
+        case .newTab: newTab(nil)
+        case .closeTab: close(id)
+        case .reload: tab.reload()
+        case .reopen: reopenClosedTab(nil)
+        case .top: Task { @MainActor in _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "window.scrollTo({top:0,behavior:'smooth'})"])) }
+        }
+    }
+
     /// What every page runs before its own scripts: the notification shim, plus mouse gestures when they are on.
     private func applyStartScript(_ decisions: [String: String]? = nil) {
-        engine.setDocumentStartScript(NotificationShim.script(decisions: decisions ?? notificationDecisions) + (isPrivate ? "" : ";\n" + AutofillScripts.focusDetector) + (settings.spellUnderline ? ";\n" + SpellScript.script : ""))
+        engine.setDocumentStartScript(NotificationShim.script(decisions: decisions ?? notificationDecisions) + (isPrivate ? "" : ";\n" + AutofillScripts.focusDetector) + (settings.spellUnderline ? ";\n" + SpellScript.script : "") + (settings.mouseGestures ? ";\n" + MouseGestures.script : ""))
     }
 
 
@@ -2136,6 +2189,11 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
               let kind = o["k"] as? String, let url = store.tab(id).flatMap({ URL(string: $0.url) }), let host = url.host else { return }
         let origin = "\(url.scheme ?? "https")://\(host)" + (url.port.map { ":\($0)" } ?? "")
         switch kind {
+        case "addrsave":
+            guard !isPrivate, let a = o["a"] as? [String: String] else { return }
+            offerToSaveAddress(a)
+        case "gesture":
+            if let d = o["d"] as? String { performGesture(d, tab: tab, id: id) }
         case "spell":
             guard settings.spellUnderline, let spellID = o["id"] as? Int, let words = o["words"] as? [String] else { return }
             let wrong = words.filter { PageSpell.check($0) != nil }
