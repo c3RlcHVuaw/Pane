@@ -667,6 +667,7 @@ struct AdvancedPane: View {
             Section {
                 BadgeToggle(symbol: "hand.tap.fill", color: .blue, title: "Haptic feedback when reordering tabs", isOn: $settings.hapticFeedback)
                 BadgeToggle(symbol: "video.fill", color: .indigo, title: "Quiet notifications during calls", subtitle: "Sites stay silent while a tab uses your camera or microphone.", isOn: $settings.quietDuringCalls)
+                BadgeToggle(symbol: "textformat.abc.dottedunderline", color: .red, title: "Underline spelling mistakes", subtitle: "Reload a page after changing this.", isOn: $settings.spellUnderline)
                 BadgeToggle(symbol: "arrow.left.arrow.right", color: .green, title: "Swipe between pages with the trackpad", isOn: $settings.swipeNavigation)
             }
             Section {

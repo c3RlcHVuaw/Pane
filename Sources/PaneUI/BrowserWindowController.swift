@@ -63,6 +63,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private let downloads = DownloadsStore()
     private var isLoaded = false
     private var downloadsButton: NSButton!
+    private var extensionsButton: NSButton!
     private var downloadsPopover: NSPopover?
     private var downloadsSaveWork: DispatchWorkItem?
     private var findBar: FindBarView?
@@ -227,6 +228,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     // MARK: Lifecycle
 
     public func start() {
+        updateExtensionsButton()
         defer { showWhatsNewIfNeeded(); startWatching(); installSwipeNavigation() }
         if syncScheduler != nil { vault.onChange = { [weak self] in self?.syncScheduler?.scheduleSync() } }
         engine.setContentBlocking(settings.blockAds)
@@ -284,6 +286,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         case "agentConfirm": agent.confirmImportantActions = settings.agentConfirm; assistantModel?.autoApprove = !settings.agentConfirm
         case "agentEnabled": refreshAssistantModel()
         case "blockAds": engine.setContentBlocking(settings.blockAds)
+        case "spellUnderline": applyStartScript()
         case "sidebarTint": updateSidebarTint()
         case "theme": applyTheme()
         case "agentPrivate": assistantModel?.agentPrivate = settings.agentPrivate; if !settings.agentPrivate { closeAgentPrivateTab() }
@@ -407,6 +410,29 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             log += "round \(r): tabs=\(store.tabs.count) live=\(live.count)\n"
         }
         return log + "survived"
+    }
+
+    /// Debug aid: opens the first extension's popup and reports what its page saw.
+    public func debugExtensionPopup() async -> String {
+        guard let e = ExtensionStore.shared.items.first(where: { $0.popup != nil }) else { return "no extension with a popup" }
+        updateExtensionsButton()
+        let buttonShown = !extensionsButton.isHidden
+        openExtensionPopup(e)
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        let title = (try? await extensionPopupTab?.devTools("Runtime.evaluate", params: Self.json(["expression": "document.title", "returnByValue": true]))) ?? "none"
+        let ok = title.contains("POPUP:object:\(e.chromeID)")
+        return "button=\(buttonShown) popup=\(ok) \(title)"
+    }
+
+    /// Debug aid: misspelled words in a text field get an underline layer.
+    public func debugSpellUnderline() async -> String {
+        store.addTab(url: "http://127.0.0.1:8765/spell.html", activate: true); showActive()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        guard let tab = activeLive?.tab else { return "no tab" }
+        _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "document.getElementById('t').dispatchEvent(new Event('input',{bubbles:true}))"]))
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let r = (try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "(() => { const o = document.querySelector('div[aria-hidden=true]'); return (o ? o.innerText + ' | spans=' + o.querySelectorAll('span').length : 'no overlay') + ' spellJS=' + window.__paneSpell + ' active=' + (document.activeElement && document.activeElement.id); })()", "returnByValue": true]))) ?? "error"
+        return r
     }
 
     /// Debug aid: Back after the first page of a new tab must return to the previous page, not to a blank one.
@@ -1068,6 +1094,9 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         downloadsButton = Glass.button(symbol: "arrow.down.circle", label: "Downloads", target: self, action: #selector(toggleDownloads(_:)))
         downloadsButton.toolTip = ShortcutCatalog.hint("Downloads", "Show Downloads")
         downloadsButton.isHidden = true
+        extensionsButton = Glass.button(symbol: "puzzlepiece.extension", label: "Extensions", target: self, action: #selector(toggleExtensionsMenu(_:)))
+        extensionsButton.toolTip = tr("Extensions")
+        extensionsButton.isHidden = true
         assistantButton = Glass.button(symbol: "sparkles", label: "Ask the Assistant", target: self, action: #selector(toggleAssistant(_:)))
         assistantButton.toolTip = ShortcutCatalog.hint("Ask the Assistant", "Ask the Assistant")
         back.isEnabled = false
@@ -1135,7 +1164,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
         // Each icon button sits on its own interactive glass; the container below lets neighbours merge like system toolbars.
         func hosted(_ b: NSButton) -> NSView { (b as? ToolbarButton)?.host ?? b }
-        let bar = NSStackView(views: [hosted(toggle), hosted(back), hosted(forward), hosted(reloadButton), pill, hosted(downloadsButton), hosted(assistantButton)])
+        let bar = NSStackView(views: [hosted(toggle), hosted(back), hosted(forward), hosted(reloadButton), pill, hosted(extensionsButton), hosted(downloadsButton), hosted(assistantButton)])
         bar.spacing = 6
         bar.distribution = .fill
         bar.translatesAutoresizingMaskIntoConstraints = false
@@ -1871,7 +1900,87 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         }
     }
 
+    // MARK: Extensions
+
+    private var extensionPopover: NSPopover?
+    private var extensionPopupTab: BrowserTab?
+
+    /// The button shows when at least one enabled extension has a toolbar popup.
+    private func updateExtensionsButton() {
+        guard let b = extensionsButton else { return }
+        let any = !isPrivate && ExtensionStore.shared.items.contains { $0.enabled && $0.popup != nil }
+        b.isHidden = !any
+    }
+
+    @objc private func toggleExtensionsMenu(_ sender: Any?) {
+        if let p = extensionPopover, p.isShown { p.performClose(nil); return }
+        let items = ExtensionStore.shared.items.filter { $0.enabled && $0.popup != nil }
+        guard !items.isEmpty else { return }
+        let pop = NSPopover(); pop.behavior = .transient
+        let rows = items.map { e in
+            AutofillRow(title: e.name, subtitle: e.detail, symbol: "puzzlepiece.extension.fill") { [weak self, weak pop] in pop?.performClose(nil); DispatchQueue.main.async { self?.openExtensionPopup(e) } }
+        }
+        let host = NSHostingController(rootView: AutofillList(rows: rows))
+        host.sizingOptions = [.preferredContentSize]
+        pop.contentViewController = host
+        extensionPopover = pop
+        pop.show(relativeTo: extensionsButton.bounds, of: extensionsButton, preferredEdge: .maxY)
+    }
+
+    /// Shows an extension's popup page in a small window under the button.
+    private func openExtensionPopup(_ e: InstalledExtension) {
+        guard let popup = e.popup else { return }
+        closeExtensionPopup()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 520))
+        let vc = NSViewController(); vc.view = container
+        let pop = NSPopover(); pop.behavior = .transient; pop.contentViewController = vc
+        pop.contentSize = container.frame.size
+        pop.delegate = popupDelegate
+        extensionPopover = pop
+        let tab = engine.makeTab(url: "chrome-extension://\(e.chromeID)/\(popup)", in: container, profile: profile)
+        extensionPopupTab = tab
+        pop.show(relativeTo: extensionsButton.bounds, of: extensionsButton, preferredEdge: .maxY)
+    }
+
+    private func closeExtensionPopup() {
+        if let t = extensionPopupTab {
+            extensionPopupTab = nil
+            let c = extensionPopover?.contentViewController?.view
+            t.close { c?.removeFromSuperview() }
+        }
+        extensionPopover?.close(); extensionPopover = nil
+    }
+
+    private lazy var popupDelegate = ExtensionPopupDelegate { [weak self] in self?.closeExtensionPopup() }
+
     // MARK: AutoFill
+
+    private var autofillPopover: NSPopover?
+
+    /// A small list under the field you clicked, like Chrome's: pick an address or card to fill the form.
+    private func showAutofillSuggestions(kind: String, x: Double, y: Double, width: Double, tab: BrowserTab, id: UUID) {
+        guard id == store.activeTabID, let container = activeLive?.container, !isPrivate else { return }
+        let store = AutofillStore.shared
+        let entries: [(title: String, subtitle: String, symbol: String, run: () -> Void)]
+        if kind == "card" {
+            entries = store.cards.map { c in (c.title, c.holder, "creditcard.fill", { [weak self] in self?.autofillCard(c, in: tab) }) }
+        } else {
+            entries = store.addresses.map { a in (a.title, [a.email, a.phone].first { !$0.isEmpty } ?? a.city, "house.fill", { [weak self] in self?.autofillAddress(a, in: tab) }) }
+        }
+        guard !entries.isEmpty else { return }
+        autofillPopover?.close()
+        let pop = NSPopover(); pop.behavior = .semitransient; pop.animates = true
+        let rows = entries.map { e in
+            AutofillRow(title: e.title, subtitle: e.subtitle, symbol: e.symbol) { [weak pop] in pop?.close(); e.run() }
+        }
+        let host = NSHostingController(rootView: AutofillList(rows: rows))
+        host.sizingOptions = [.preferredContentSize]
+        pop.contentViewController = host
+        autofillPopover = pop
+        let b = container.bounds
+        let rect = NSRect(x: x, y: b.height - y - 2, width: min(max(width, 40), b.width), height: 2)
+        pop.show(relativeTo: rect, of: container, preferredEdge: .minY)
+    }
 
     func autofillAddress(_ a: AddressProfile, in tab: BrowserTab) {
         Task { @MainActor in
@@ -1900,12 +2009,17 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         store.addTab(url: "http://127.0.0.1:8765/address.html", activate: true); showActive()
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         guard let tab = activeLive?.tab else { return "no tab" }
+        var seed = AddressProfile(); seed.fullName = "Anna Smith"; AutofillStore.shared.upsert(seed)
+        _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "var n=document.getElementById('n');n.focus();n.dispatchEvent(new FocusEvent('focusin',{bubbles:true}))"]))
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        let suggested = autofillPopover?.isShown == true
+        autofillPopover?.close(); AutofillStore.shared.removeAddress(seed.id)
         var a = AddressProfile(); a.fullName = "Anna Smith"; a.email = "anna@example.com"; a.phone = "+1 555 0100"; a.street = "1 Main St"; a.city = "Boston"; a.postalCode = "02101"; a.country = "United States"
         autofillAddress(a, in: tab)
         _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": AutofillScripts.card(number: "4242424242424242", holder: "ANNA SMITH", month: "03", year: "2029")]))
         try? await Task.sleep(nanoseconds: 800_000_000)
         let r = (try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "['n','e','t','a1','city','zip','country','cc','ccn','mm','yy'].map(i=>i+'='+document.getElementById(i).value).join('|')", "returnByValue": true]))) ?? "error"
-        return r
+        return "suggested=\(suggested) " + r
     }
 
     /// Menu: fills the (most recent) saved login for the current site.
@@ -1921,7 +2035,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// What every page runs before its own scripts: the notification shim, plus mouse gestures when they are on.
     private func applyStartScript(_ decisions: [String: String]? = nil) {
-        engine.setDocumentStartScript(NotificationShim.script(decisions: decisions ?? notificationDecisions) + "")
+        engine.setDocumentStartScript(NotificationShim.script(decisions: decisions ?? notificationDecisions) + (isPrivate ? "" : ";\n" + AutofillScripts.focusDetector) + (settings.spellUnderline ? ";\n" + SpellScript.script : ""))
     }
 
 
@@ -1945,6 +2059,13 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
               let kind = o["k"] as? String, let url = store.tab(id).flatMap({ URL(string: $0.url) }), let host = url.host else { return }
         let origin = "\(url.scheme ?? "https")://\(host)" + (url.port.map { ":\($0)" } ?? "")
         switch kind {
+        case "spell":
+            guard settings.spellUnderline, let spellID = o["id"] as? Int, let words = o["words"] as? [String] else { return }
+            let wrong = words.filter { PageSpell.check($0) != nil }
+            let list = (try? JSONSerialization.data(withJSONObject: wrong)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            Task { @MainActor in _ = try? await tab.devTools("Runtime.evaluate", params: Self.json(["expression": "window.__paneSpellApply && window.__paneSpellApply(\(spellID), \(list))"])) }
+        case "autofill":
+            showAutofillSuggestions(kind: o["kind"] as? String ?? "address", x: o["x"] as? Double ?? 0, y: o["y"] as? Double ?? 0, width: o["w"] as? Double ?? 200, tab: tab, id: id)
         case "ask":
             guard let window else { return }
             if let known = notificationDecisions[origin] { answerNotificationRequest(known, on: tab); return }
@@ -3487,4 +3608,13 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         store.addTab(url: url, groupID: store.tab(id)?.groupID)
         showActive()
     }
+}
+
+
+/// Tidies up the extension popup page when its window is dismissed.
+@MainActor
+final class ExtensionPopupDelegate: NSObject, NSPopoverDelegate {
+    private let onClose: () -> Void
+    init(_ onClose: @escaping () -> Void) { self.onClose = onClose }
+    func popoverDidClose(_ notification: Notification) { onClose() }
 }

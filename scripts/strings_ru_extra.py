@@ -348,4 +348,5 @@ EXTRA = {
 "Sorting your tabs…": "Раскладываю вкладки…", "Could not sort the tabs": "Не удалось разложить вкладки", "Tabs sorted into groups": "Вкладки разложены по группам", "Nothing to group": "Группировать нечего",
 "Reading the link…": "Читаю ссылку…", "Could not open the link": "Не удалось открыть ссылку", "Nothing to summarize there": "Там нечего пересказывать", "The assistant did not answer": "Ассистент не ответил",
 "Mouse gestures": "Жесты мышью", "Hold the right button and drag: ← back, → forward, ↓ new tab, ↓→ close tab, ↑↓ reload, ↓← reopen tab, ↑ to top.": "Зажмите правую кнопку и ведите: ← назад, → вперёд, ↓ новая вкладка, ↓→ закрыть вкладку, ↑↓ обновить, ↓← вернуть закрытую, ↑ наверх.",
+"Underline spelling mistakes": "Подчёркивать ошибки в словах", "Reload a page after changing this.": "После изменения обновите страницу.", "Extensions": "Расширения",
 }

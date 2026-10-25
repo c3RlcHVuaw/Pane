@@ -119,3 +119,35 @@ private struct CardEditor: View {
         .frame(width: 400, height: 300)
     }
 }
+
+struct AutofillRow: Identifiable {
+    let id = UUID()
+    var title: String, subtitle: String, symbol: String
+    var run: () -> Void
+}
+
+/// The suggestion list shown under a form field.
+struct AutofillList: View {
+    let rows: [AutofillRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(rows) { r in
+                Button(action: r.run) {
+                    HStack(spacing: 10) {
+                        Image(systemName: r.symbol).foregroundStyle(.secondary).frame(width: 20)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(verbatim: r.title).lineLimit(1)
+                            if !r.subtitle.isEmpty { Text(verbatim: r.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .frame(width: 280)
+    }
+}

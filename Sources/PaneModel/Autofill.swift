@@ -109,6 +109,28 @@ public enum AutofillScripts {
         return script(values)
     }
 
+    /// Runs on every page: tells Pane when an address or card field gets the cursor, and where it is.
+    public static let focusDetector = """
+    (() => {
+      if (window.__paneAutofill) return;
+      Object.defineProperty(window, '__paneAutofill', { value: true });
+      const card = /card.?n(um|o)|cardnumber|ccnum|cc-number|номер.?карт/i;
+      const addr = /full.?name|first.?name|last.?name|e-?mail|phone|mobile|address|street|city|zip|postal|name|телефон|адрес|индекс|город|фио|имя|почт/i;
+      addEventListener('focusin', e => {
+        const el = e.target;
+        if (!el || el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' || /^(password|checkbox|radio|submit|button|hidden|file|range|color|date)$/.test(el.type) || el.value) return;
+        const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+        const hay = [el.name, el.id, el.placeholder, el.getAttribute('aria-label')].join(' ');
+        let kind = null;
+        if (/^cc-/.test(ac) || card.test(hay)) kind = 'card';
+        else if (/(name|email|tel|address|postal|street|organization)/.test(ac) || (ac !== 'off' && addr.test(hay) && !/search|query|login|user|captcha|promo|coupon/i.test(hay))) kind = 'address';
+        if (!kind) return;
+        const r = el.getBoundingClientRect();
+        console.log('__pane-notif:' + JSON.stringify({ k: 'autofill', kind, x: r.left, y: r.bottom, w: r.width, h: r.height }));
+      }, true);
+    })();
+    """
+
     private static func script(_ values: [String: String]) -> String {
         let json = (try? JSONSerialization.data(withJSONObject: values)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         return "(function(){var V=\(json);\(body)})()"

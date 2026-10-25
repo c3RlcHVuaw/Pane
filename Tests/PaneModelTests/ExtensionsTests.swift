@@ -50,3 +50,12 @@ final class FocusSitesTests: XCTestCase {
         XCTAssertFalse(FocusSites.isBlocked(host: "example.com", in: l))
     }
 }
+
+final class ExtensionIDTests: XCTestCase {
+    func testChromeID() {
+        // Matches what Chromium reported for /private/tmp/sbx/s/Extensions/t.
+        XCTAssertEqual(ExtensionStore.chromeID(forFolder: "/private/tmp/sbx/nope"), ExtensionStore.chromeID(forFolder: "/private/tmp/sbx/nope"))
+        XCTAssertEqual(ExtensionStore.chromeID(forFolder: "/private/tmp/sbx/s/Extensions/t").count, 32)
+        XCTAssertEqual(ExtensionStore.chromeID(forFolder: "/private/tmp/sbx/s/Extensions/t"), "jlopimbdbcocbljhcnfbhckhhjgdmlda")
+    }
+}

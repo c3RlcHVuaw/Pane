@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public struct InstalledExtension: Identifiable, Equatable, Sendable {
@@ -8,6 +9,9 @@ public struct InstalledExtension: Identifiable, Equatable, Sendable {
     public var path: String
     public var iconPath: String?
     public var enabled: Bool
+    /// The id Chromium gives an unpacked extension (from its folder's real path), and the page its toolbar button opens.
+    public var chromeID: String
+    public var popup: String?
 }
 
 public enum ExtensionError: Error, LocalizedError, Equatable {
@@ -73,9 +77,19 @@ public final class ExtensionStore: ObservableObject {
             if let pick = best.first(where: { $0.0 >= 32 }) ?? best.last { icon = folder.appendingPathComponent(pick.1).path }
         }
         let name = resolve(m["name"] as? String)
+        let action = (m["action"] ?? m["browser_action"] ?? m["page_action"]) as? [String: Any]
+        let popup = (action?["default_popup"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return InstalledExtension(id: folder.lastPathComponent, name: name.isEmpty ? folder.lastPathComponent : name,
                                   version: m["version"] as? String ?? "", detail: resolve(m["description"] as? String),
-                                  path: folder.path, iconPath: icon, enabled: enabled)
+                                  path: folder.path, iconPath: icon, enabled: enabled, chromeID: chromeID(forFolder: folder.path), popup: popup)
+    }
+
+    /// Chromium names an unpacked extension after the SHA-256 of its real folder path ("a"…"p" for each hex digit).
+    public nonisolated static func chromeID(forFolder path: String) -> String {
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let real = realpath(path, &buf) != nil ? String(cString: buf) : path
+        let digest = SHA256.hash(data: Data(real.utf8))
+        return digest.prefix(16).map { b in String(UnicodeScalar(97 + (b >> 4))) + String(UnicodeScalar(97 + (b & 15))) }.joined()
     }
 
     private nonisolated static func localizedMessages(folder: URL, defaultLocale: String?) -> [String: String] {

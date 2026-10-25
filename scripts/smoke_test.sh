@@ -18,7 +18,7 @@ sleep 1
 
 run() { # name seconds env...
   local name=$1 delay=$2; shift 2
-  rm -rf "$OUT/support"; mkdir -p "$OUT/support"
+  rm -rf "$OUT/support"; mkdir -p "$OUT/support/Extensions"; cp -R Tests/site/ext "$OUT/support/Extensions/ext"
   env "$@" PANE_ONSCREEN_TEST=1 PANE_ONSCREEN_FRONT=1 PANE_SUPPORT_DIR="$OUT/support" PANE_SNAPSHOT="$OUT/$name" PANE_SNAPSHOT_DELAY=$delay PANE_DEBUG_NO_NOTIFY=1 "$APP" >"$OUT/$name.log" 2>&1
 }
 STAMP=$(mktemp); sleep 1
@@ -40,9 +40,18 @@ grep -q "sidebar survived.*mismatches=0" "$OUT/sidebar-sidebar.txt" 2>/dev/null 
 echo "AutoFill and spell check"
 run autofill 12 PANE_DEBUG_AUTOFILL=1
 grep -q "n=Anna Smith|e=anna@example.com" "$OUT/autofill-autofill.txt" 2>/dev/null && pass "address form filled" || fail "autofill"
+grep -q "suggested=true" "$OUT/autofill-autofill.txt" 2>/dev/null && pass "suggestion list appears under the field" || fail "autofill suggestion list"
 grep -q "cc=4242424242424242|ccn=ANNA SMITH|mm=03|yy=2029" "$OUT/autofill-autofill.txt" 2>/dev/null && pass "card form filled" || fail "card autofill"
 run spell 12 PANE_DEBUG_X=45 PANE_DEBUG_RIGHTCLICK=spell PANE_DEBUG_CONTEXT_LOG="$OUT/spell.txt"
 grep -q "misspelled=превет" "$OUT/spell.txt" 2>/dev/null && pass "Russian spell check suggests corrections" || fail "Russian spell check"
+
+echo "Extension popup"
+run extpopup 12 PANE_DEBUG_EXTPOPUP=1
+grep -q "button=true popup=true" "$OUT/extpopup-extpopup.txt" 2>/dev/null && pass "extension toolbar button opens its popup" || fail "extension popup"
+
+echo "Spelling underline"
+run spellul 12 PANE_DEBUG_SPELLUL=1
+grep -q "spans=[1-9]" "$OUT/spellul-spellul.txt" 2>/dev/null && pass "misspelled words are underlined" || fail "spelling underline"
 
 echo "Back after the first page"
 run back 14 PANE_DEBUG_BACK=1
