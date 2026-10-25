@@ -343,7 +343,10 @@ final class TabSidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     }
 
     func outlineView(_ ov: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int { children(of: item as? SidebarNode).count }
-    func outlineView(_ ov: NSOutlineView, child index: Int, ofItem item: Any?) -> Any { children(of: item as? SidebarNode)[index] }
+    func outlineView(_ ov: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        let list = children(of: item as? SidebarNode)
+        return index >= 0 && index < list.count ? list[index] : sleepingNode  // never trap on a list that moved under us
+    }
     func outlineView(_ ov: NSOutlineView, isItemExpandable item: Any) -> Bool {
         if case .tab = (item as! SidebarNode).kind { return false }
         return true

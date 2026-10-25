@@ -37,6 +37,14 @@ echo "Sidebar stress: random moves, groups, pins, sleeps, closes"
 run sidebar 60 PANE_DEBUG_SIDEBAR=250
 grep -q "sidebar survived.*mismatches=0" "$OUT/sidebar-sidebar.txt" 2>/dev/null && pass "sidebar survived 250 random operations" || fail "sidebar stress did not finish"
 
+echo "Private windows opening and closing"
+run windows 25 PANE_DEBUG_WINDOWS=8
+grep -q "windows left=1 survived" "$OUT/windows-windows.txt" 2>/dev/null && pass "8 private windows opened and closed" || fail "window open/close cycle"
+
+RSS=$(grep -o 'rss=[0-9]*->[0-9]*' "$OUT/sidebar-sidebar.txt" 2>/dev/null | head -1)
+GROWTH=$(echo "$RSS" | sed -E 's/rss=([0-9]+)->([0-9]+)/\2 - \1/' | bc 2>/dev/null || echo 9999)
+[ "${GROWTH:-9999}" -lt 400 ] && pass "memory growth in the sidebar stress ($RSS MB)" || fail "memory grew too much ($RSS)"
+
 echo "AutoFill and spell check"
 run autofill 12 PANE_DEBUG_AUTOFILL=1
 grep -q "n=Anna Smith|e=anna@example.com" "$OUT/autofill-autofill.txt" 2>/dev/null && pass "address form filled" || fail "autofill"

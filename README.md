@@ -40,6 +40,12 @@
 ### Tabs & workspaces
 Vertical sidebar, tab groups, pinned tabs, **workspaces** you can switch in one key (⌥⌘[ / ⌥⌘]), **split view** (⌥⌘\), tabs that fall asleep to save memory, profiles and private windows.
 
+### Everyday helpers
+**Quick answers** in the address bar (`2+2*3`, `100 usd in rub`) · **sessions** (save a set of tabs by name) · search the text of every open tab · tabs fade as they go unused · **focus mode** (⌃⌘F) with a timer that blocks distracting sites · full-page **screenshots** · save a **quote** from a page into its note · quiet notifications during calls · AI tab grouping and "summarize this link" (with your key).
+
+### Forms, extensions & spelling
+**AutoFill** for addresses and cards (card numbers stay in the Keychain and need Touch ID) · **Chrome extensions** (install from the Web Store link or a folder; toolbar popups work) · spell checking in Russian and English with red underlines.
+
 ### An agent that actually browses
 Switch the panel to **Act** and say what you want. The agent opens and closes tabs, searches, fills forms, organises bookmarks into folders, watches pages ("tell me when the price drops below 50 000"), compares sites and writes applications from your "About me" notes. You see every step with animations, it asks before anything risky (or turn on **auto-approve**), and it **never types passwords, card numbers or one-time codes**. Page text can't give it orders.
 Past conversations are kept (clock in the panel header) and can be reopened; **private mode** makes the agent work in a separate private tab that can't see your bookmarks, history, notes or logins.

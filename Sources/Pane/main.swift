@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let bookmarks = BookmarkStore()
     // A test instance (PANE_SUPPORT_DIR) keeps its preferences apart, so it can never change the real app's.
     static let testDefaults: UserDefaults? = ProcessInfo.processInfo.environment["PANE_SUPPORT_DIR"] != nil ? UserDefaults(suiteName: "com.pane.browser.testing") : nil
+    var watchdog: HangWatchdog?
     let settings = AppSettings(defaults: AppDelegate.testDefaults ?? .standard)
     let account = AccountSession(defaults: AppDelegate.testDefaults ?? .standard)
 
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let env = ProcessInfo.processInfo.environment
         let dataRoot = env["PANE_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) } ?? support.appendingPathComponent("Pane")
         let languages: [String] = AppLanguage.current.hasPrefix("ru") ? ["ru-RU", "ru", "en-US", "en"] : ["en-US", "en"]
+        if env["PANE_SUPPORT_DIR"] == nil, env["PANE_OFFSCREEN"] == nil { watchdog = HangWatchdog(directory: dataRoot.appendingPathComponent("Hangs")); watchdog?.start() }
         SessionStore.shared.configure(file: dataRoot.appendingPathComponent("sessions.json"))
         AutofillStore.shared.configure(file: dataRoot.appendingPathComponent("autofill.json"))
         let extensionsRoot = dataRoot.appendingPathComponent("Extensions")
@@ -146,6 +148,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     if let n = env["PANE_DEBUG_STRESS_ALL"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugStressEverything(rounds: n) ?? "").write(toFile: prefix + "-stress.txt", atomically: true, encoding: .utf8) } }
                     if let n = env["PANE_DEBUG_SIDEBAR"].flatMap(Int.init) { Task { @MainActor in try? (await win?.debugSidebarStress(steps: n) ?? "").write(toFile: prefix + "-sidebar.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_GROUPS"] != nil { Task { @MainActor in try? (await win?.debugGroups() ?? "").write(toFile: prefix + "-groups.txt", atomically: true, encoding: .utf8) } }
+                    if let n = env["PANE_DEBUG_WINDOWS"].flatMap(Int.init) {
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            for _ in 0..<n {
+                                self.openPrivateWindow()
+                                try? await Task.sleep(nanoseconds: 700_000_000)
+                                if let w = self.controllers.last, w.isPrivate { w.newTab(nil); try? await Task.sleep(nanoseconds: 300_000_000); w.window?.close() }
+                                try? await Task.sleep(nanoseconds: 500_000_000)
+                            }
+                            try? "windows left=\(self.controllers.count) survived".write(toFile: prefix + "-windows.txt", atomically: true, encoding: .utf8)
+                        }
+                    }
                     if env["PANE_DEBUG_EXTPOPUP"] != nil { Task { @MainActor in try? (await win?.debugExtensionPopup() ?? "").write(toFile: prefix + "-extpopup.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_SPELLUL"] != nil { Task { @MainActor in try? (await win?.debugSpellUnderline() ?? "").write(toFile: prefix + "-spellul.txt", atomically: true, encoding: .utf8) } }
                     if env["PANE_DEBUG_BACK"] != nil { Task { @MainActor in try? (await win?.debugBack() ?? "").write(toFile: prefix + "-back.txt", atomically: true, encoding: .utf8) } }

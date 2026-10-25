@@ -185,6 +185,11 @@ public final class TabStore {
         let kept = tabs.filter { $0.id != excluding }
         let active = activeTabID.flatMap { id in kept.contains { $0.id == id } ? id : nil } ?? kept.first?.id
         let data = try JSONEncoder().encode(Snapshot(tabs: kept, groups: groups, activeTabID: active))
+        // If this save would drop groups, keep the previous file aside first: a safety net against losing someone's folders.
+        if let old = try? Data(contentsOf: url), let snap = try? JSONDecoder().decode(Snapshot.self, from: old), snap.groups.count > groups.count {
+            let backup = url.deletingPathExtension().appendingPathExtension("groups-backup.json")
+            try? old.write(to: backup, options: .atomic)
+        }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
     }

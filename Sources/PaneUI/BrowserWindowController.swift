@@ -236,6 +236,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         let restored = sessionURL.map { store.load(from: $0) } ?? false
         if !restored { store.addTab(url: settings.newTabURL) }
         else if settings.startup == .newTab { store.addTab(url: settings.newTabURL) }
+        lastGroupCount = store.groups.count
         applyAppearance()
         applyTheme()
         updater?.automaticChecks = settings.automaticUpdates
@@ -469,6 +470,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     /// Debug aid: hammers the sidebar with random moves, groups, pins, sleeps and closes at different speeds.
     public func debugSidebarStress(steps: Int) async -> String {
+        func rssMB() -> Int {
+            var info = mach_task_basic_info(); var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+            let kr = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) } }
+            return kr == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : -1
+        }
+        let rssStart = rssMB()
         var rng = SystemRandomNumberGenerator()
         var made = 0
         var mismatches = 0
@@ -508,7 +515,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         try? await Task.sleep(nanoseconds: 600_000_000)
         let c = sidebar.debugConsistency()
         if c.rows != c.expected { mismatches += 1 }
-        return "sidebar survived: steps=\(steps) tabs=\(store.tabs.count) groups=\(store.groups.count) made=\(made) mismatches=\(mismatches)"
+        return "sidebar survived: steps=\(steps) tabs=\(store.tabs.count) groups=\(store.groups.count) made=\(made) mismatches=\(mismatches) rss=\(rssStart)->\(rssMB())MB"
     }
 
     /// Debug aid: feeds absurdly long text to every place that shows page-controlled text.
@@ -797,7 +804,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         o.present(in: rootView)
     }
 
+    private var lastGroupCount = 0
+
     private func modelChanged() {
+        // Folders vanishing is worth a trace: note when and from where, so a bad path can be found later.
+        if store.groups.count < lastGroupCount, let dir = storage?.directory {
+            let line = "\(Date()) groups \(lastGroupCount) -> \(store.groups.count)\n" + Thread.callStackSymbols.prefix(12).joined(separator: "\n") + "\n\n"
+            let url = dir.appendingPathComponent("groups.log")
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() } else { try? line.write(to: url, atomically: true, encoding: .utf8) }
+        }
+        lastGroupCount = store.groups.count
         sidebar.reload()
         scheduleSave()
     }
@@ -972,7 +988,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
     public func windowShouldClose(_ sender: NSWindow) -> Bool {
         let env = ProcessInfo.processInfo.environment
-        return env["PANE_DEBUG_STRESS_ALL"] == nil
+        return env["PANE_DEBUG_STRESS_ALL"] == nil && env["PANE_DEBUG_SIDEBAR"] == nil
     }
 
     public func windowWillClose(_ notification: Notification) {
